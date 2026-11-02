@@ -110,6 +110,13 @@ def run_diagnostics(cfg: HudConfig, console: Any, *, mic: bool = True) -> None:
         t0 = time.monotonic()
         text = ear.listen(startup_silence=8.0)
         console.print(f"   nivel máximo del micro: {peak['v']:.2f} (ideal 0.3–1.0)")
+        tm = ear.last_timing
+        if tm:
+            console.print(
+                f"   grabación {tm.get('grabacion', 0):.1f} s "
+                f"({tm.get('audio', 0):.1f} s de audio) · "
+                f"transcripción {tm.get('transcripcion', 0):.1f} s"
+            )
         if text:
             console.print(
                 f"   he entendido ({time.monotonic() - t0:.1f} s): «{text}»  {ok}"

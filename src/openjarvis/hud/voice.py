@@ -141,74 +141,125 @@ def choose_whisper_model(requested: str, cuda: bool) -> tuple[str, str, str]:
     return req, device, compute
 
 
-class AdaptiveRecorder:
-    """Record one utterance, calibrating the silence threshold to the room.
+class EndpointDetector:
+    """Decide, block by block, when an utterance starts and ends.
 
-    The first ~0.3 s measure background noise; speech starts when the level
-    rises well above it and ends after a short pause. This works with quiet
-    microphones and noisy rooms where a fixed threshold either never triggers
-    or cuts sentences in half.
+    Works on per-block RMS values (30 ms blocks). Speech starts when the level
+    clearly exceeds the calibrated room noise. It ends after ``end_silence``
+    seconds below a threshold *relative to how loud the speaker was* — laptop
+    microphones with automatic gain raise the background after you stop
+    talking, so a fixed noise threshold would keep recording until the cap.
     """
+
+    BLOCK = 0.03
+
+    def __init__(
+        self,
+        *,
+        end_silence: float = 0.8,
+        startup_timeout: float = 6.0,
+        max_utterance: float = 12.0,
+        calib_blocks: int = 10,
+    ) -> None:
+        self.end_silence = end_silence
+        self.startup_timeout = startup_timeout
+        self.max_utterance = max_utterance
+        self.calib_blocks = calib_blocks
+        self._calib: list[float] = []
+        self.ambient = 0.0
+        self.speech = False
+        self._peak = 0.0
+        self._quiet = 0
+        self._n = 0
+        self._speech_blocks = 0
+
+    @property
+    def start_threshold(self) -> float:
+        return max(0.008, self.ambient * 3.0)
+
+    def feed(self, rms: float) -> str:
+        """Return ``"wait"``, ``"speech"``, ``"end"`` or ``"timeout"``."""
+        self._n += 1
+        if self._n <= self.calib_blocks:
+            self._calib.append(rms)
+            if self._n == self.calib_blocks:
+                self._calib.sort()
+                self.ambient = self._calib[len(self._calib) // 2]
+            return "wait"
+
+        if not self.speech:
+            if rms > self.start_threshold:
+                self.speech = True
+                self._peak = rms
+                self._speech_blocks = 1
+                return "speech"
+            self.ambient = 0.95 * self.ambient + 0.05 * rms
+            if self._n * self.BLOCK >= self.startup_timeout:
+                return "timeout"
+            return "wait"
+
+        self._speech_blocks += 1
+        self._peak = max(self._peak * 0.997, rms)
+        silence_level = max(self.start_threshold * 0.8, self._peak * 0.2)
+        if rms < silence_level:
+            self._quiet += 1
+        else:
+            self._quiet = 0
+        if self._quiet * self.BLOCK >= self.end_silence:
+            return "end"
+        if self._speech_blocks * self.BLOCK >= self.max_utterance:
+            return "end"
+        return "speech"
+
+
+class AdaptiveRecorder:
+    """Record one utterance from the default microphone (see EndpointDetector)."""
 
     def __init__(
         self,
         *,
         sample_rate: int = 16000,
-        end_silence: float = 1.0,
+        end_silence: float = 0.8,
         startup_timeout: float = 6.0,
-        max_seconds: float = 25.0,
+        max_utterance: float = 12.0,
         on_level: Optional[LevelFn] = None,
     ) -> None:
         self.sample_rate = sample_rate
-        self.end_silence = end_silence
-        self.startup_timeout = startup_timeout
-        self.max_seconds = max_seconds
+        self.detector = EndpointDetector(
+            end_silence=end_silence,
+            startup_timeout=startup_timeout,
+            max_utterance=max_utterance,
+        )
         self.on_level = on_level
 
     def record(self) -> "Any":
         import numpy as np
         import sounddevice as sd
 
-        block = int(self.sample_rate * 0.03)  # 30 ms
-        calib_blocks = 10
-        frames: list = []
-        rms_hist: list[float] = []
-        speech = False
-        quiet = 0
+        block = int(self.sample_rate * EndpointDetector.BLOCK)
         pre_roll = 10  # keep ~300 ms before speech starts
-        threshold = 0.0
+        frames: list = []
+        det = self.detector
+        hard_cap = int((det.startup_timeout + det.max_utterance + 2) / det.BLOCK)
 
         with sd.InputStream(
             samplerate=self.sample_rate, channels=1, dtype="float32", blocksize=block
         ) as stream:
-            total = int(self.max_seconds / 0.03)
-            for i in range(total):
+            for _ in range(hard_cap):
                 data, _ = stream.read(block)
                 chunk = np.asarray(data, dtype=np.float32).reshape(-1)
                 rms = float(np.sqrt(np.mean(chunk * chunk)) + 1e-7)
                 if self.on_level is not None:
                     self.on_level(min(1.0, rms * 12))
                 frames.append(chunk)
-                if i < calib_blocks:
-                    rms_hist.append(rms)
-                    continue
-                if not threshold:
-                    ambient = float(np.median(rms_hist))
-                    threshold = max(0.008, ambient * 3.2)
-                if rms > threshold:
-                    if not speech:
-                        frames = frames[-pre_roll:]
-                    speech = True
-                    quiet = 0
-                elif speech:
-                    quiet += 1
-                    if quiet * 0.03 >= self.end_silence:
-                        break
-                elif i * 0.03 >= self.startup_timeout:
+                verdict = det.feed(rms)
+                if verdict == "timeout":
                     return np.zeros(0, dtype=np.float32)
-                if not speech and len(frames) > pre_roll:
+                if verdict == "end":
+                    break
+                if not det.speech and len(frames) > pre_roll:
                     frames = frames[-pre_roll:]
-        if not speech:
+        if not det.speech:
             return np.zeros(0, dtype=np.float32)
         audio = np.concatenate(frames)
         peak = float(np.max(np.abs(audio))) or 1.0
@@ -225,6 +276,7 @@ class Ear:
         self._cloud: Any = None
         self._resolved = False
         self.description = ""
+        self.last_timing: dict = {}
 
     def _resolve(self) -> bool:
         if self._resolved:
@@ -254,6 +306,7 @@ class Ear:
             name, device, compute = choose_whisper_model(self.cfg.modelo_oido, False)
             self._model = WhisperModel(name, device=device, compute_type=compute)
         self.description = f"Whisper {name} ({'GPU' if device == 'cuda' else 'CPU'})"
+        self._beam = 5 if device == "cuda" else 2  # CPU: faster, near-equal accuracy
         return True
 
     @property
@@ -270,12 +323,17 @@ class Ear:
                 "No hay reconocimiento de voz disponible. "
                 "Instala las dependencias con: uv sync --extra desktop --extra hud"
             )
+        t0 = time.monotonic()
         audio = AdaptiveRecorder(
             startup_timeout=startup_silence, on_level=self.on_level
         ).record()
+        t1 = time.monotonic()
+        self.last_timing = {"grabacion": t1 - t0, "audio": len(audio) / 16000}
         if len(audio) < 16000 * 0.4:  # < 0.4 s → nothing said
             return ""
-        return self.transcribe(audio)
+        text = self.transcribe(audio)
+        self.last_timing["transcripcion"] = time.monotonic() - t1
+        return text
 
     def transcribe(self, audio: "Any") -> str:
         lang = self.cfg.idioma_escucha or None
@@ -291,7 +349,7 @@ class Ear:
         segments, _info = self._model.transcribe(
             audio,
             language=lang,
-            beam_size=5,
+            beam_size=getattr(self, "_beam", 2),
             vad_filter=True,
             condition_on_previous_text=False,
             initial_prompt=WHISPER_PROMPT,
@@ -304,4 +362,10 @@ class Ear:
         return text
 
 
-__all__ = ["AdaptiveRecorder", "Ear", "Speaker", "choose_whisper_model"]
+__all__ = [
+    "AdaptiveRecorder",
+    "EndpointDetector",
+    "Ear",
+    "Speaker",
+    "choose_whisper_model",
+]

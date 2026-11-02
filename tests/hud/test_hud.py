@@ -254,3 +254,31 @@ def test_pick_installed_model() -> None:
     assert pick_installed_model("qwen3:8b", installed) == "qwen3:8b"
     assert pick_installed_model("llama3", ["llama3:latest"]) == "llama3:latest"
     assert pick_installed_model("qwen3:8b", []) == ""
+
+
+def _endpoint(rms_values: list) -> tuple:
+    from openjarvis.hud.voice import EndpointDetector
+
+    det = EndpointDetector(end_silence=0.8, startup_timeout=6.0)
+    for i, r in enumerate(rms_values):
+        verdict = det.feed(r)
+        if verdict in ("end", "timeout"):
+            return verdict, round(i * det.BLOCK, 2)
+    return "running", None
+
+
+def test_endpoint_ends_even_when_agc_raises_background() -> None:
+    # 0.3 s calibration, 0.3 s quiet, 1.5 s speech, then AGC-boosted noise.
+    rms = [0.01] * 20 + [0.2] * 50 + [0.035] * 200
+    verdict, t = _endpoint(rms)
+    assert verdict == "end"
+    assert t is not None and t < 3.2  # ~0.8 s after speech, not the 12 s cap
+
+
+def test_endpoint_times_out_on_silence() -> None:
+    assert _endpoint([0.01] * 400)[0] == "timeout"
+
+
+def test_endpoint_caps_never_ending_speech() -> None:
+    verdict, t = _endpoint([0.01] * 10 + [0.3] * 1000)
+    assert verdict == "end" and t <= 12.5
