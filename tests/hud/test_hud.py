@@ -375,3 +375,78 @@ def test_assistant_falls_back_when_engine_fails() -> None:
     assert said == ["modo de emergencia"]
     assert notices and "Ollama" in notices[0]["text"]
     a.server._httpd.server_close()  # noqa: SLF001 - never started
+
+
+# ── v2: emotions, skills, settings ─────────────────────────────────────────
+
+
+def test_splitter_reads_emotion_tags() -> None:
+    from openjarvis.hud.brain import SentenceSplitter
+
+    sp = SentenceSplitter()
+    out = sp.feed("[bromista] ¡Buon giorno, señor! Vaya energía. [serio] Ahora bien, ")
+    out += sp.feed("tenemos tres reuniones.") + sp.flush()
+    assert [(str(o), o.mood) for o in out] == [
+        ("¡Buon giorno, señor!", "bromista"),
+        ("Vaya energía.", "bromista"),
+        ("Ahora bien, tenemos tres reuniones.", "serio"),
+    ]
+
+
+def test_prosody_follows_mood() -> None:
+    from openjarvis.hud.voice import prosody_for
+
+    fast, pitch, vol = prosody_for("entusiasta", 1.0)
+    slow, low, _ = prosody_for("empatico", 1.0)
+    assert fast > 1.0 > slow
+    assert pitch.startswith("+") and low.startswith("-")
+    assert prosody_for("desconocido") == (1.0, "+0Hz", "+0%")
+
+
+def test_skill_parsers() -> None:
+    from openjarvis.hud.skills import parse_note, parse_timer
+
+    assert parse_timer("pon un temporizador de 5 minutos") == (300, "5 minutos")
+    assert parse_timer("alarma en diez segundos") == (10, "10 segundos")
+    assert parse_timer("¿qué hora es?") is None
+    assert (
+        parse_note("apunta que tengo que llamar a Marta") == "Tengo que llamar a Marta"
+    )
+    assert parse_note("hola jarvis") is None
+
+
+def test_notes_store_roundtrip(tmp_path) -> None:
+    from openjarvis.hud.skills import NotesStore
+
+    store = NotesStore(tmp_path / "notas.json")
+    note = store.add("Comprar café")
+    assert NotesStore(tmp_path / "notas.json").texts() == ["Comprar café"]
+    assert store.delete(note["id"]) and store.texts() == []
+
+
+def test_memory_persists_between_sessions(tmp_path) -> None:
+    from openjarvis.hud.brain import JarvisBrain
+    from openjarvis.hud.config import HudConfig
+
+    path = str(tmp_path / "mem.json")
+    b = JarvisBrain(HudConfig(), memory_path=path)
+    b._remember("hola", "¡Hola, señor!")  # noqa: SLF001
+    again = JarvisBrain(HudConfig(), memory_path=path)
+    assert again._history[-2:] == [("user", "hola"), ("assistant", "¡Hola, señor!")]  # noqa: SLF001
+    again.forget()
+    assert JarvisBrain(HudConfig(), memory_path=path)._history == []  # noqa: SLF001
+
+
+def test_save_config_value(tmp_path) -> None:
+    from openjarvis.hud.config import (
+        DEFAULT_TEMPLATE,
+        load_hud_config,
+        save_config_value,
+    )
+
+    p = tmp_path / "jarvis.toml"
+    p.write_text(DEFAULT_TEMPLATE, encoding="utf-8")
+    save_config_value(p, "voz", "voz", "en-US-AndrewMultilingualNeural")
+    cfg = load_hud_config(p)
+    assert cfg.voz == "en-US-AndrewMultilingualNeural"
+    assert cfg.motor_oido == "local"  # other sections untouched

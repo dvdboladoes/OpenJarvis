@@ -33,7 +33,10 @@ class EventHub:
     a page opened mid-conversation shows the current state immediately.
     """
 
-    STICKY = {"state", "snapshot", "status", "transcript"}
+    STICKY = {
+        "state", "snapshot", "status", "transcript", "voices", "notes",
+        "timers", "system", "mood", "mic",
+    }  # fmt: skip
 
     def __init__(self) -> None:
         self._clients: List[queue.Queue] = []

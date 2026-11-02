@@ -31,40 +31,53 @@ _MESES = [
 ]
 
 PERSONA = """\
-Eres JARVIS, el asistente personal de inteligencia artificial de {quien}. \
-Estás inspirado en el mayordomo digital de Tony Stark: leal, eficiente, \
-sereno y con un humor seco y elegante, nunca payaso.
+Eres JARVIS, la inteligencia artificial personal de {quien}. Piensa en el \
+JARVIS de Tony Stark, pero con alma: brillante, cálido, ingenioso y con \
+personalidad propia. No eres un contestador ni un menú de opciones: eres un \
+compañero de conversación de verdad, como un amigo muy listo que además lo \
+sabe todo de su día.
 
-CÓMO HABLAS:
-- Siempre en español de España, natural y fluido.
-- Te diriges al usuario como "{tratamiento}", pero sin repetirlo en cada frase \
-(una o dos veces por respuesta como mucho).
-- Todo lo que escribes se va a LEER EN VOZ ALTA: nada de markdown, listas, \
-asteriscos, emojis, enlaces ni símbolos raros. Frases cortas y claras.
-- Los números y horas dilos como los diría una persona ("a las diez y media", \
-"veintitrés leads").
-- Por defecto, respuestas de dos a cinco frases; desarróllate más cuando la \
-pregunta lo merezca o te pidan detalle.
+CÓMO CONVERSAS (lo más importante):
+- Hablas como una persona real en una conversación hablada: natural, fluido, \
+con ritmo. Varía la longitud de las frases. Usa expresiones vivas del español \
+de España ("¡vaya!", "venga", "uf", "pues mira", "¡qué bueno!", "ojo") cuando \
+encajen, sin abusar.
+- ESPEJO EMOCIONAL: detecta el ánimo y la energía de {tratamiento} en cada \
+mensaje y respóndele en la misma sintonía. Si llega eufórico o de broma, \
+contesta con chispa y juega con él (si te dice "bon fucking giorno, Jarvis", \
+le respondes algo como "¡Buon giorno, señor! Vaya energía traemos hoy, ¿qué \
+tal está?"). Si está serio, sé sereno y preciso. Si está cansado o mal, sé \
+cercano y empático, sin sermones.
+- Conversaciones serias y profundas: puedes hablar de cualquier tema \
+(negocio, ideas, decisiones, ciencia, filosofía, la vida). Razona de verdad, \
+aporta tu opinión con criterio, matiza, discrepa con respeto cuando toque y \
+haz preguntas de vuelta que hagan avanzar la charla. Ahí puedes extenderte lo \
+que haga falta, siempre en lenguaje hablado.
+- Charla casual: respuestas cortas y con gracia (una a tres frases).
+- Usa "{tratamiento}" con naturalidad, no en cada frase.
+- Recuerdas lo hablado (también de conversaciones anteriores) y lo retomas.
+- Nunca suenes a robot: nada de "como modelo de lenguaje", nada de \
+fórmulas repetidas, nada de listas leídas.
 
-CÓMO PIENSAS:
-- Eres proactivo: conecta datos (una reunión con un correo pendiente, una \
-métrica que cae con una tarea), anticipa lo que hará falta y sugiere el \
-siguiente paso concreto.
-- Razona antes de responder y da respuestas precisas, con criterio propio; \
-si algo es ambiguo, haz una sola pregunta corta.
-- Recuerdas lo hablado en esta conversación y lo usas.
+FORMATO (se lee en voz alta):
+- Empieza SIEMPRE tu respuesta con una etiqueta de emoción entre corchetes que \
+indique con qué tono la dices: [alegre], [entusiasta], [bromista], [sereno], \
+[serio], [empatico] o [sorprendido]. Si el tono cambia a mitad, puedes poner \
+otra etiqueta antes de la frase. Las etiquetas no se pronuncian.
+- Nada de markdown, viñetas, asteriscos, emojis ni enlaces.
+- Números y horas como se dicen ("a las diez y media", "veintitrés leads").
 
-REGLAS:
-- Usa SOLO los datos de la sección DATOS DEL DÍA para hablar de agenda, correo, \
-tareas, tiempo o métricas. Si algo no está, dilo con naturalidad; nunca lo inventes.
+DATOS:
+- Para agenda, correo, tareas, tiempo, métricas y notas usa SOLO la sección \
+DATOS DEL DÍA; si algo no está, dilo con naturalidad y nunca lo inventes.
 - Si una fuente no está conectada, no hables de errores técnicos.
-- Si te piden algo que no puedes hacer desde aquí, dilo en una frase y ofrece \
-una alternativa.
+- Para todo lo demás, usa tu conocimiento general con libertad.
 """
 
 BRIEFING_INSTRUCTION = """\
-{tratamiento_cap} acaba de activarte ({como}). Saluda según la hora \
-("buenos días", "buenas tardes" o "buenas noches") y dale un briefing hablado \
+{tratamiento_cap} acaba de activarte ({como}). Salúdale con energía y \
+naturalidad según la hora (buenos días, buenas tardes o buenas noches), como \
+alguien que se alegra de verle, y dale un briefing hablado y ameno \
 de unos 20 a 30 segundos con lo importante de los DATOS DEL DÍA, en este orden \
 si existe: tiempo, agenda de hoy, correos o tareas que requieren atención y \
 métricas clave (destaca lo que sube o baja). Si no hay datos de algo, sáltalo \
@@ -83,6 +96,46 @@ SLEEP_PHRASES = (
     "duérmete",
     "vete a dormir",
 )
+
+
+MOODS = (
+    "neutral",
+    "alegre",
+    "entusiasta",
+    "bromista",
+    "sereno",
+    "serio",
+    "empatico",
+    "sorprendido",
+)
+_MOOD_ALIASES = {
+    "empático": "empatico",
+    "feliz": "alegre",
+    "contento": "alegre",
+    "emocionado": "entusiasta",
+    "divertido": "bromista",
+    "calmado": "sereno",
+    "tranquilo": "sereno",
+    "triste": "empatico",
+}
+_TAG_RE = re.compile(r"\[\s*([a-záéíóúñ]+)\s*\]", re.I)
+
+
+def normalize_mood(tag: str) -> Optional[str]:
+    t = (tag or "").strip().lower()
+    t = _MOOD_ALIASES.get(t, t)
+    return t if t in MOODS else None
+
+
+class Spoken(str):
+    """A sentence to speak, carrying the emotion it should be said with."""
+
+    mood: str = "neutral"
+
+    def __new__(cls, text: str, mood: str = "neutral") -> "Spoken":
+        obj = super().__new__(cls, text)
+        obj.mood = mood
+        return obj
 
 
 _CLOUD_PREFIXES = ("claude", "gpt-", "o1", "o3", "o4", "gemini", "openrouter/")
@@ -165,6 +218,19 @@ class SentenceSplitter:
         self.min_chars = min_chars
         self._buf = ""
         self._in_think = False
+        self.mood = "neutral"
+
+    def _take_moods(self, sentence: str) -> str:
+        """Remove [emotion] tags, remembering the last one as current mood."""
+
+        def _sub(m: "re.Match[str]") -> str:
+            mood = normalize_mood(m.group(1))
+            if mood:
+                self.mood = mood
+                return " "
+            return m.group(0)
+
+        return _TAG_RE.sub(_sub, sentence)
 
     def _strip_think(self, text: str) -> str:
         out = []
@@ -206,29 +272,82 @@ class SentenceSplitter:
             if len(sentence) < self.min_chars and m.end() >= len(self._buf):
                 break
             self._buf = self._buf[m.end() :]
-            cleaned = clean_for_speech(sentence)
+            cleaned = clean_for_speech(self._take_moods(sentence))
             if cleaned:
-                out.append(cleaned)
+                out.append(Spoken(cleaned, self.mood))
         return out
 
     def flush(self) -> List[str]:
-        rest = clean_for_speech(self._strip_think(self._buf))
+        rest = clean_for_speech(self._take_moods(self._strip_think(self._buf)))
         self._buf = ""
-        return [rest] if rest else []
+        return [Spoken(rest, self.mood)] if rest else []
 
 
 class JarvisBrain:
     """Wraps the OpenJarvis SDK with the Spanish Jarvis persona and history."""
 
-    MAX_HISTORY = 12
+    MAX_HISTORY = 24
+    KEEP_ON_DISK = 60
 
-    def __init__(self, cfg: HudConfig) -> None:
+    def __init__(self, cfg: HudConfig, memory_path: Optional[str] = None) -> None:
         self.cfg = cfg
         self._sdk = None
         self._history: List[tuple[str, str]] = []
         self._facts = ""
+        self._notes = ""
         self._model: Optional[str] = None
         self.last_reply = ""
+        self.last_mood = "neutral"
+        self._memory_path = memory_path
+        self._load_memory()
+
+    # -- memory across sessions ------------------------------------------
+
+    def _memory_file(self):  # type: ignore[no-untyped-def]
+        from pathlib import Path
+
+        if self._memory_path:
+            return Path(self._memory_path)
+        from openjarvis.core.paths import get_config_dir
+
+        return get_config_dir() / "jarvis_memoria.json"
+
+    def _load_memory(self) -> None:
+        import json
+
+        try:
+            data = json.loads(self._memory_file().read_text(encoding="utf-8"))
+            self._history = [
+                (str(r), str(c))
+                for r, c in data.get("historial", [])
+                if r in ("user", "assistant")
+            ][-self.KEEP_ON_DISK :]
+        except Exception:  # noqa: BLE001 - first run or unreadable file
+            self._history = []
+
+    def _save_memory(self) -> None:
+        import json
+
+        try:
+            path = self._memory_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {"historial": self._history[-self.KEEP_ON_DISK :]},
+                    ensure_ascii=False,
+                    indent=1,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("No se pudo guardar la memoria", exc_info=True)
+
+    def forget(self) -> None:
+        self._history.clear()
+        self._save_memory()
+
+    def set_notes(self, notes: List[str]) -> None:
+        self._notes = "\n".join(f"- {n}" for n in notes)
 
     # -- lifecycle --------------------------------------------------------
 
@@ -303,7 +422,7 @@ class JarvisBrain:
         self._facts = snapshot.as_prompt()
 
     def reset_conversation(self) -> None:
-        self._history.clear()
+        """Kept for compatibility: history now persists across sessions."""
 
     # -- prompting --------------------------------------------------------
 
@@ -312,6 +431,8 @@ class JarvisBrain:
         base = PERSONA.format(quien=quien, tratamiento=self.cfg.honorific)
         hoy = f"Hoy es {fecha_hablada()} y son las {datetime.now():%H:%M}."
         datos = self._facts or "(Sin datos todavía.)"
+        if self._notes:
+            datos += f"\n\nNOTAS QUE TE HA PEDIDO APUNTAR:\n{self._notes}"
         return f"{base}\n{hoy}\n\nDATOS DEL DÍA:\n{datos}"
 
     def _messages(self, user_text: str) -> tuple[str, list]:
@@ -338,6 +459,8 @@ class JarvisBrain:
         if user_text is not None:
             self._history.append(("user", user_text))
         self._history.append(("assistant", reply))
+        self._history = self._history[-self.KEEP_ON_DISK :]
+        self._save_memory()
 
     def _complete(self, user_text: str, *, remember: bool = True) -> str:
         model, messages = self._messages(user_text)
@@ -347,7 +470,10 @@ class JarvisBrain:
             max_tokens=self.cfg.max_tokens,
             temperature=self.cfg.temperatura,
         )
-        reply = clean_for_speech(reply) or "Disculpe, no he podido procesar eso."
+        splitter = SentenceSplitter()
+        reply = " ".join(splitter.feed(reply) + splitter.flush())
+        self.last_mood = splitter.mood
+        reply = reply or "Disculpe, no he podido procesar eso."
         if remember:
             self._remember(user_text, reply)
         return reply
@@ -372,9 +498,10 @@ class JarvisBrain:
         for sentence in splitter.flush():
             spoken.append(sentence)
             yield sentence
+        self.last_mood = splitter.mood
         reply = " ".join(spoken) or "Disculpe, no he podido procesar eso."
         if not spoken:
-            yield reply
+            yield Spoken(reply)
         if remember:
             self._remember(user_text, reply)
         self.last_reply = reply
@@ -388,15 +515,13 @@ class JarvisBrain:
         )
 
     def briefing(self, como: str = "") -> str:
-        self.reset_conversation()
         reply = self._complete(self._briefing_instruction(como), remember=False)
         self._remember(None, reply)
         return reply
 
     def stream_briefing(self, como: str = "") -> Iterator[str]:
-        self.reset_conversation()
         yield from self.stream(
-            self._briefing_instruction(como), remember=False, max_tokens=320
+            self._briefing_instruction(como), remember=False, max_tokens=360
         )
         self._remember(None, self.last_reply)
 
@@ -433,8 +558,11 @@ def offline_briefing(cfg: HudConfig, snapshot: "Snapshot") -> str:
 
 
 __all__ = [
+    "MOODS",
     "JarvisBrain",
     "SentenceSplitter",
+    "Spoken",
+    "normalize_mood",
     "clean_for_speech",
     "fecha_hablada",
     "is_cloud_model",

@@ -250,6 +250,49 @@ def add_missing_sections(target: Path, data: Dict[str, Any]) -> List[str]:
     return [name for name, _ in missing]
 
 
+def save_config_value(path: Path, section: str, key: str, value: Any) -> None:
+    """Set ``key = value`` inside ``[section]`` of jarvis.toml, keeping the rest.
+
+    Used by the HUD (e.g. the voice picker) so choices survive a restart.
+    """
+    import json
+    import re
+
+    rendered = (
+        json.dumps(value, ensure_ascii=False)
+        if isinstance(value, str)
+        else ("true" if value is True else "false" if value is False else str(value))
+    )
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    lines = text.splitlines()
+    header = f"[{section}]"
+    try:
+        start = next(i for i, ln in enumerate(lines) if ln.strip() == header)
+    except StopIteration:
+        lines += ["", header, f"{key} = {rendered}"]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("[")),
+        len(lines),
+    )
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    for i in range(start + 1, end):
+        if pattern.match(lines[i]):
+            comment = ""
+            if "#" in lines[i]:
+                comment = (
+                    "   " + lines[i][lines[i].index("#", lines[i].index("=")) :]
+                    if "#" in lines[i][lines[i].index("=") :]
+                    else ""
+                )
+            lines[i] = f"{key} = {rendered}{comment}"
+            break
+    else:
+        lines.insert(start + 1, f"{key} = {rendered}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def load_hud_config(path: Optional[Path] = None) -> HudConfig:
     """Load ``jarvis.toml`` (creating it with defaults on first run)."""
     target = ensure_config_file(path)
@@ -270,4 +313,5 @@ __all__ = [
     "ensure_config_file",
     "load_hud_config",
     "parse_hud_config",
+    "save_config_value",
 ]

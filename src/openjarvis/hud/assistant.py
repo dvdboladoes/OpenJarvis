@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any, Dict, Optional
 
 from openjarvis.hud.brain import (
     JarvisBrain,
+    Spoken,
     is_cloud_model,
     is_sleep_command,
     offline_briefing,
 )
-from openjarvis.hud.config import HudConfig
+from openjarvis.hud.config import HudConfig, save_config_value
 from openjarvis.hud.context import Snapshot, collect_snapshot
 from openjarvis.hud.server import EventHub, HudServer
+from openjarvis.hud.skills import NotesStore, TimerManager, parse_note, parse_timer
 from openjarvis.hud.voice import Ear, Speaker
 
 logger = logging.getLogger(__name__)
@@ -24,25 +27,61 @@ SNAPSHOT_MAX_AGE = 300  # seconds before the data is refreshed on wake
 SNAPSHOT_REFRESH = 900  # background refresh period
 
 
+def voice_catalog() -> list:
+    """Voices offered in the HUD picker (free edge voices + paid if configured)."""
+    from openjarvis.speech.edge_tts_backend import SPANISH_VOICES
+
+    voices = [{"motor": "edge", "voz": v, "nombre": n} for v, n in SPANISH_VOICES]
+    if os.environ.get("ELEVENLABS_API_KEY"):
+        voices.insert(
+            0,
+            {
+                "motor": "elevenlabs",
+                "voz": os.environ.get("ELEVENLABS_VOICE_ID", ""),
+                "nombre": "ElevenLabs · premium",
+            },
+        )
+    if os.environ.get("OPENAI_API_KEY"):
+        voices.append({"motor": "openai_tts", "voz": "onyx", "nombre": "OpenAI · Onyx"})
+    return voices
+
+
 class JarvisAssistant:
     def __init__(self, cfg: HudConfig, *, mic: bool = True) -> None:
+        from openjarvis.core.paths import get_config_dir
+
         self.cfg = cfg
         self.hub = EventHub()
         self.brain = JarvisBrain(cfg)
         self.speaker = Speaker(cfg)
         self.ear = Ear(cfg, on_level=self._mic_level)
+        self.notes = NotesStore(get_config_dir() / "jarvis_notas.json")
+        self.timers = TimerManager(
+            on_change=lambda items: self.hub.publish("timers", items=items),
+            on_done=self._timer_done,
+        )
+        self.brain.set_notes(self.notes.texts())
         self.server = HudServer(
             self.hub,
             {
                 "activate": self._api_activate,
+                "listen": self._api_listen,
                 "ask": self._api_ask,
                 "stop": self._api_stop,
                 "refresh": self._api_refresh,
+                "voice": self._api_voice,
+                "timer": self._api_timer,
+                "timer_cancel": self._api_timer_cancel,
+                "note": self._api_note,
+                "note_delete": self._api_note_delete,
+                "mic": self._api_mic,
+                "forget": self._api_forget,
             },
             port=cfg.puerto,
         )
         self._use_mic = mic
         self.listener: Any = None
+        self._mic_enabled = True
         self._session = threading.Lock()
         self._cancel = threading.Event()
         self._shutdown = threading.Event()
@@ -50,25 +89,30 @@ class JarvisAssistant:
         self._snapshot_at = 0.0
         self._snapshot_lock = threading.Lock()
         self._state = ""
+        self._mood = "neutral"
 
     # ── public ─────────────────────────────────────────────────────────
 
     def start(self) -> None:
         self.server.start()
         self._set_state("arrancando", "Iniciando sistemas…")
+        self.hub.publish("voices", items=voice_catalog(), actual=self._voice_info())
+        self.hub.publish("notes", items=self.notes.list())
+        self.hub.publish("timers", items=self.timers.list())
         if self._use_mic:
             self._start_listener()
-        threading.Thread(
-            target=self._warm_up, name="jarvis-warmup", daemon=True
-        ).start()
-        threading.Thread(
-            target=self._refresh_loop, name="jarvis-data", daemon=True
-        ).start()
+        for target, name in (
+            (self._warm_up, "jarvis-warmup"),
+            (self._refresh_loop, "jarvis-data"),
+            (self._system_loop, "jarvis-system"),
+        ):
+            threading.Thread(target=target, name=name, daemon=True).start()
 
     def stop(self) -> None:
         self._shutdown.set()
         self._cancel.set()
         self.speaker.stop()
+        self.timers.stop()
         if self.listener is not None:
             self.listener.stop()
         self.server.stop()
@@ -135,12 +179,11 @@ class JarvisAssistant:
         except Exception:  # noqa: BLE001
             pass
         try:
+            model = self.brain.resolve_model()
             sdk = self.brain._ensure_sdk()  # noqa: SLF001
-            sdk._ensure_engine()  # noqa: SLF001
             engine = getattr(sdk, "_resolved_engine_key", "") or "ok"
-            status["motor"] = (
-                f"{self.cfg.modelo} ({engine})" if self.cfg.modelo else engine
-            )
+            status["motor"] = f"{model} · {engine}"
+            status["nube"] = is_cloud_model(model)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Motor de IA no disponible: %s", exc)
             status["motor"] = ""
@@ -151,14 +194,17 @@ class JarvisAssistant:
 
     def _idle_hint(self) -> str:
         ways = []
-        if self.listener and "palmadas" in self.listener.detectors:
+        if (
+            self._mic_enabled
+            and self.listener
+            and "palmadas" in self.listener.detectors
+        ):
             ways.append("dos palmadas")
-        if self.listener and "voz" in self.listener.detectors:
+        if self._mic_enabled and self.listener and "voz" in self.listener.detectors:
             ways.append("«Hey Jarvis»")
-        if not ways:
-            return "Pulsa el núcleo para activarme"
-        text = " o ".join(ways)
-        return text[:1].upper() + text[1:] + " para activarme"
+        ways.append("espacio para hablar")
+        text = ", ".join(ways[:-1]) + (" o " if len(ways) > 1 else "") + ways[-1]
+        return text[:1].upper() + text[1:]
 
     # ── data ───────────────────────────────────────────────────────────
 
@@ -166,6 +212,26 @@ class JarvisAssistant:
         while not self._shutdown.is_set():
             self._get_snapshot(force=True)
             self._shutdown.wait(SNAPSHOT_REFRESH)
+
+    def _system_loop(self) -> None:
+        """Live CPU / RAM / battery for the HUD's system gauges."""
+        try:
+            import psutil
+        except ImportError:
+            return
+        psutil.cpu_percent(None)
+        while not self._shutdown.wait(2.0):
+            try:
+                battery = psutil.sensors_battery()
+                self.hub.publish(
+                    "system",
+                    cpu=round(psutil.cpu_percent(None)),
+                    ram=round(psutil.virtual_memory().percent),
+                    bateria=round(battery.percent) if battery else None,
+                    cargando=bool(battery.power_plugged) if battery else None,
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
     def _get_snapshot(self, force: bool = False) -> Snapshot:
         with self._snapshot_lock:
@@ -187,17 +253,34 @@ class JarvisAssistant:
 
     # ── session ────────────────────────────────────────────────────────
 
-    def _run_session(self, source: str) -> None:
+    def _begin(self) -> bool:
         if not self._session.acquire(blocking=False):
-            return
+            return False
         self._cancel.clear()
         if self.listener is not None:
             self.listener.pause()
+        return True
+
+    def _end(self) -> None:
+        self.hub.publish("transcript", text="", final=True)
+        self._set_mood("neutral")
+        self._set_state("reposo", self._idle_hint())
+        if self.listener is not None and self._mic_enabled:
+            self.listener.resume()
+        self._session.release()
+
+    def _run_session(self, source: str) -> None:
+        if not self._begin():
+            return
         try:
             self.hub.publish("wake", source=source)
+            if source == "ptt":
+                # Push-to-talk: straight to listening, no briefing.
+                self._get_snapshot()
+                self._conversation(first_turn=True)
+                return
             self._set_state("activando", "Sistemas en línea")
             snap = self._get_snapshot()
-
             self._set_state("pensando", "Preparando su briefing…")
             spoken = self._say_stream(
                 self.brain.stream_briefing(source),
@@ -210,22 +293,19 @@ class JarvisAssistant:
             self._set_state("error", "Algo ha fallado — revisa la consola")
             time.sleep(2)
         finally:
-            self.hub.publish("transcript", text="", final=True)
-            self._set_state("reposo", self._idle_hint())
-            if self.listener is not None:
-                self.listener.resume()
-            self._session.release()
+            self._end()
 
-    def _conversation(self) -> None:
+    def _conversation(self, first_turn: bool = False) -> None:
         silences = 0
         while not self._cancel.is_set() and not self._shutdown.is_set():
             self._set_state("escuchando", "Le escucho…")
             try:
-                heard = self.ear.listen()
+                heard = self.ear.listen(startup_silence=8.0 if first_turn else 6.0)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("No puedo escuchar: %s", exc)
                 self.hub.publish("notice", text=str(exc))
                 return
+            first_turn = False
             if self._cancel.is_set():
                 return
             if not heard:
@@ -236,11 +316,13 @@ class JarvisAssistant:
             silences = 0
             self.hub.publish("message", role="user", text=heard)
             if is_sleep_command(heard):
-                self._say(f"A su disposición, {self.cfg.honorific}.")
+                self._say(Spoken(f"A su disposición, {self.cfg.honorific}.", "sereno"))
                 return
             self._answer(heard)
 
     def _answer(self, text: str) -> None:
+        if self._try_skill(text):
+            return
         self._set_state("pensando", "Procesando…")
         self._say_stream(
             self.brain.stream_reply(text),
@@ -248,6 +330,38 @@ class JarvisAssistant:
                 "Lo siento, mi motor de lenguaje no responde en este momento."
             ),
         )
+
+    def _try_skill(self, text: str) -> bool:
+        """Timers and notes are handled instantly, without the language model."""
+        timer = parse_timer(text)
+        if timer:
+            seconds, label = timer
+            self.timers.add(seconds, label)
+            self._say(Spoken(f"Hecho. Temporizador de {label} en marcha.", "alegre"))
+            return True
+        note = parse_note(text)
+        if note:
+            self.notes.add(note)
+            self.brain.set_notes(self.notes.texts())
+            self.hub.publish("notes", items=self.notes.list())
+            self._say(Spoken("Apuntado.", "alegre"))
+            return True
+        return False
+
+    def _timer_done(self, timer: Any) -> None:
+        self.hub.publish("alarm", label=timer.label)
+        text = Spoken(
+            f"{self.cfg.honorific.capitalize()}, el temporizador de "
+            f"{timer.label} ha terminado.",
+            "sorprendido",
+        )
+        if self._begin():
+            try:
+                self._say(text)
+            finally:
+                self._end()
+        else:
+            self.hub.publish("notice", text=str(text))
 
     def _say_stream(self, sentences: Any, fallback: Any) -> bool:
         """Speak sentences as the model produces them.
@@ -297,7 +411,8 @@ class JarvisAssistant:
                 failed = True
                 break
             sentence, audio = item
-            said.append(sentence)
+            said.append(str(sentence))
+            self._set_mood(getattr(sentence, "mood", "neutral"))
             if self._state != "hablando":
                 self._set_state("hablando", "")
             self.hub.publish("partial", role="jarvis", text=" ".join(said))
@@ -308,16 +423,20 @@ class JarvisAssistant:
                     logger.warning("No se pudo reproducir el audio: %s", exc)
 
         if said:
-            self.hub.publish("message", role="jarvis", text=" ".join(said))
+            self.hub.publish(
+                "message", role="jarvis", text=" ".join(said), mood=self._mood
+            )
             return True
         if failed:
             self._say(fallback())
         return not failed
 
     def _say(self, text: str) -> None:
-        self.hub.publish("message", role="jarvis", text=text)
+        mood = getattr(text, "mood", "neutral")
+        self._set_mood(mood)
+        self.hub.publish("message", role="jarvis", text=str(text), mood=mood)
         self._set_state("hablando", "")
-        self.speaker.say(text, on_level=self._voice_level)
+        self.speaker.say(text, on_level=self._voice_level, mood=mood)
 
     def _engine_notice(self, exc: Exception) -> None:
         """Explain in plain Spanish why the language model is not answering."""
@@ -351,30 +470,36 @@ class JarvisAssistant:
     def _api_activate(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"started": self.wake("interfaz")}
 
+    def _api_listen(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {"started": self.wake("ptt")}
+
+    def _run_job(self, job: Any) -> bool:
+        def _wrapped() -> None:
+            if not self._begin():
+                return
+            try:
+                job()
+            except Exception:  # noqa: BLE001
+                logger.exception("Error en una acción del HUD")
+            finally:
+                self._end()
+
+        if self._session.locked():
+            return False
+        threading.Thread(target=_wrapped, daemon=True).start()
+        return True
+
     def _api_ask(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        text = str(payload.get("text", "")).strip()[:2000]
+        text = str(payload.get("text", "")).strip()[:4000]
         if not text:
             return {"started": False}
 
         def _job() -> None:
-            if not self._session.acquire(blocking=False):
-                return
-            if self.listener is not None:
-                self.listener.pause()
-            try:
-                self._get_snapshot()
-                self.hub.publish("message", role="user", text=text)
-                self._answer(text)
-            finally:
-                self._set_state("reposo", self._idle_hint())
-                if self.listener is not None:
-                    self.listener.resume()
-                self._session.release()
+            self._get_snapshot()
+            self.hub.publish("message", role="user", text=text)
+            self._answer(text)
 
-        busy = self._session.locked()
-        if not busy:
-            threading.Thread(target=_job, daemon=True).start()
-        return {"started": not busy}
+        return {"started": self._run_job(_job)}
 
     def _api_stop(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
         self._cancel.set()
@@ -387,11 +512,87 @@ class JarvisAssistant:
         ).start()
         return {"refreshing": True}
 
+    def _voice_info(self) -> Dict[str, str]:
+        return {"motor": self.cfg.motor_voz, "voz": self.cfg.voz}
+
+    def _api_voice(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        motor = str(payload.get("motor", "")).strip()
+        voz = str(payload.get("voz", "")).strip()
+        if motor or voz:
+            self.speaker.set_voice(motor, voz)
+            if self.cfg.path is not None:
+                if motor:
+                    save_config_value(self.cfg.path, "voz", "motor", motor)
+                if voz:
+                    save_config_value(self.cfg.path, "voz", "voz", voz)
+            self.hub.publish("voices", items=voice_catalog(), actual=self._voice_info())
+        if payload.get("probar"):
+            sample = Spoken(
+                f"¡Hola, {self.cfg.honorific}! ¿Qué tal suena esta voz? "
+                "Yo diría que bastante bien.",
+                "alegre",
+            )
+            return {"started": self._run_job(lambda: self._say(sample))}
+        return self._voice_info()
+
+    def _api_timer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        seconds = int(float(payload.get("segundos", 0) or 0))
+        if seconds <= 0:
+            return {"ok": False}
+        mins = seconds // 60
+        label = payload.get("etiqueta") or (
+            f"{mins} minuto{'s' if mins != 1 else ''}"
+            if seconds % 60 == 0
+            else f"{seconds} segundos"
+        )
+        return {"id": self.timers.add(seconds, str(label)).id}
+
+    def _api_timer_cancel(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {"ok": self.timers.cancel(str(payload.get("id", "")))}
+
+    def _api_note(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        text = str(payload.get("texto", "")).strip()[:500]
+        if not text:
+            return {"ok": False}
+        note = self.notes.add(text)
+        self.brain.set_notes(self.notes.texts())
+        self.hub.publish("notes", items=self.notes.list())
+        return note
+
+    def _api_note_delete(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        ok = self.notes.delete(str(payload.get("id", "")))
+        self.brain.set_notes(self.notes.texts())
+        self.hub.publish("notes", items=self.notes.list())
+        return {"ok": ok}
+
+    def _api_mic(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Privacy switch: stop listening for claps / wake word."""
+        self._mic_enabled = bool(payload.get("on", True))
+        if self.listener is not None:
+            if self._mic_enabled and not self._session.locked():
+                self.listener.resume()
+            elif not self._mic_enabled:
+                self.listener.pause()
+        self.hub.publish("mic", on=self._mic_enabled)
+        if not self._session.locked():
+            self._set_state("reposo", self._idle_hint())
+        return {"on": self._mic_enabled}
+
+    def _api_forget(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.brain.forget()
+        self.hub.publish("notice", text="Memoria de conversación borrada.")
+        return {"ok": True}
+
     # ── events ─────────────────────────────────────────────────────────
 
     def _set_state(self, state: str, label: str) -> None:
         self._state = state
         self.hub.publish("state", state=state, label=label)
+
+    def _set_mood(self, mood: str) -> None:
+        if mood != self._mood:
+            self._mood = mood
+            self.hub.publish("mood", mood=mood)
 
     def _voice_level(self, level: float) -> None:
         self.hub.publish("level", source="voz", value=round(level, 3))
@@ -400,4 +601,4 @@ class JarvisAssistant:
         self.hub.publish("level", source="mic", value=round(level, 3))
 
 
-__all__ = ["JarvisAssistant"]
+__all__ = ["JarvisAssistant", "voice_catalog"]

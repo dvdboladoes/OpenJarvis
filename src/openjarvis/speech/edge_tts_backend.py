@@ -20,14 +20,19 @@ from openjarvis.speech.tts import TTSBackend, TTSResult
 
 DEFAULT_VOICE = "es-ES-AlvaroNeural"
 
-_COMMON_VOICES = [
-    "es-ES-AlvaroNeural",
-    "es-ES-ElviraNeural",
-    "es-ES-XimenaNeural",
-    "es-MX-JorgeNeural",
-    "es-MX-DaliaNeural",
+# (voice id, label shown in the Jarvis HUD voice picker)
+SPANISH_VOICES = [
+    ("es-ES-AlvaroNeural", "Álvaro · España"),
+    ("es-ES-ElviraNeural", "Elvira · España"),
+    ("es-ES-XimenaNeural", "Ximena · España"),
+    ("en-US-AndrewMultilingualNeural", "Andrew · multilingüe, muy natural"),
+    ("en-US-BrianMultilingualNeural", "Brian · multilingüe, cálido"),
+    ("en-US-AvaMultilingualNeural", "Ava · multilingüe, expresiva"),
+    ("es-MX-JorgeNeural", "Jorge · México"),
+    ("es-AR-TomasNeural", "Tomás · Argentina"),
+]
+_COMMON_VOICES = [v for v, _ in SPANISH_VOICES] + [
     "en-GB-RyanNeural",
-    "en-GB-ThomasNeural",
     "en-US-GuyNeural",
 ]
 
@@ -39,10 +44,14 @@ def _rate_from_speed(speed: float) -> str:
     return f"{pct:+d}%"
 
 
-async def _synthesize_async(text: str, voice: str, rate: str, pitch: str) -> bytes:
+async def _synthesize_async(
+    text: str, voice: str, rate: str, pitch: str, volume: str = "+0%"
+) -> bytes:
     import edge_tts
 
-    communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+    communicate = edge_tts.Communicate(
+        text, voice, rate=rate, pitch=pitch, volume=volume
+    )
     chunks: list[bytes] = []
     async for chunk in communicate.stream():
         if chunk.get("type") == "audio":
@@ -89,10 +98,16 @@ class EdgeTTSBackend(TTSBackend):
         voice_id: str = DEFAULT_VOICE,
         speed: float = 1.0,
         output_format: str = "mp3",
+        pitch: str = "",
+        volume: str = "+0%",
     ) -> TTSResult:
+        """Synthesize *text*. ``pitch`` (e.g. ``"+6Hz"``) and ``volume`` (e.g.
+        ``"+10%"``) let callers colour the delivery with emotion."""
         voice = voice_id or DEFAULT_VOICE
         audio = _run_coro(
-            _synthesize_async(text, voice, _rate_from_speed(speed), self._pitch)
+            _synthesize_async(
+                text, voice, _rate_from_speed(speed), pitch or self._pitch, volume
+            )
         )
         # edge-tts streams MP3; soundfile (libsndfile >= 1.1) decodes it, so the
         # shared play_wav() helper can play it even though it is not WAV.
@@ -111,4 +126,4 @@ class EdgeTTSBackend(TTSBackend):
         return importlib.util.find_spec("edge_tts") is not None
 
 
-__all__ = ["DEFAULT_VOICE", "EdgeTTSBackend"]
+__all__ = ["DEFAULT_VOICE", "SPANISH_VOICES", "EdgeTTSBackend"]

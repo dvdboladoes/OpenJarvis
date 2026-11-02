@@ -15,6 +15,41 @@ logger = logging.getLogger(__name__)
 LevelFn = Callable[[float], None]
 
 
+# How each emotion colours the voice: (speed multiplier, pitch Hz, volume %).
+# Small shifts on purpose — enough to hear the mood, never cartoonish.
+MOOD_PROSODY = {
+    "neutral": (1.0, 0, 0),
+    "alegre": (1.06, 6, 4),
+    "entusiasta": (1.12, 11, 10),
+    "bromista": (1.05, 5, 4),
+    "sereno": (0.96, -2, -2),
+    "serio": (0.94, -6, 0),
+    "empatico": (0.92, -3, -6),
+    "sorprendido": (1.08, 12, 6),
+}
+
+# ElevenLabs v3 audio tags for each mood (only used with an eleven_v3 model).
+MOOD_ELEVEN_TAGS = {
+    "alegre": "[happy]",
+    "entusiasta": "[excited]",
+    "bromista": "[playful]",
+    "sereno": "[calm]",
+    "serio": "[serious]",
+    "empatico": "[warmly]",
+    "sorprendido": "[surprised]",
+}
+
+
+def prosody_for(mood: str, base_speed: float = 1.0) -> tuple[float, str, str]:
+    """Return ``(speed, pitch, volume)`` for edge-tts given an emotion."""
+    speed, pitch, volume = MOOD_PROSODY.get(mood or "neutral", MOOD_PROSODY["neutral"])
+    return (
+        round(base_speed * speed, 3),
+        f"{pitch:+d}Hz",
+        f"{volume:+d}%",
+    )
+
+
 class Speaker:
     """Text-to-speech with the configured backend and graceful fallback."""
 
@@ -44,20 +79,47 @@ class Speaker:
 
         return default_voice_for(getattr(backend, "backend_id", ""))
 
-    def synthesize(self, text: str) -> Optional[bytes]:
+    def set_voice(self, motor: str = "", voz: str = "") -> None:
+        """Switch voice at runtime (from the HUD voice picker)."""
+        if motor and motor != self.cfg.motor_voz:
+            self.cfg.motor_voz = motor
+            self._backend = None
+            self._attempted.clear()
+        if voz:
+            self.cfg.voz = voz
+
+    def synthesize(self, text: str, mood: str = "") -> Optional[bytes]:
+        mood = mood or getattr(text, "mood", "") or "neutral"
         while (backend := self._resolve()) is not None:
+            backend_id = getattr(backend, "backend_id", "")
             try:
                 kwargs: dict = {"output_format": "wav", "speed": self.cfg.velocidad}
                 voice = self._voice_for(backend)
                 if voice:
                     kwargs["voice_id"] = voice
-                result = backend.synthesize(text, **kwargs)
+                say = str(text)
+                if backend_id == "edge":
+                    speed, pitch, volume = prosody_for(mood, self.cfg.velocidad)
+                    kwargs.update(speed=speed, pitch=pitch, volume=volume)
+                elif backend_id == "elevenlabs":
+                    model = getattr(backend, "_model", "") or ""
+                    tag = MOOD_ELEVEN_TAGS.get(mood)
+                    if tag and "v3" in model:
+                        say = f"{tag} {say}"
+                result = backend.synthesize(say, **kwargs)
                 if result.audio:
                     return result.audio
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Voz %r falló: %s", getattr(backend, "backend_id", "?"), exc
-                )
+                logger.warning("Voz %r falló: %s", backend_id or "?", exc)
+                # An unknown voice id should not kill speech: retry once with
+                # the backend's default voice before moving to another engine.
+                if backend_id == "edge" and self.cfg.voz:
+                    from openjarvis.speech.edge_tts_backend import DEFAULT_VOICE
+
+                    if self.cfg.voz != DEFAULT_VOICE:
+                        logger.warning("Uso la voz %s", DEFAULT_VOICE)
+                        self.cfg.voz = DEFAULT_VOICE
+                        continue
             self._backend = None
         logger.warning("No hay motor de voz disponible (instala: pip install edge-tts)")
         return None
@@ -100,8 +162,10 @@ class Speaker:
             if on_level is not None:
                 on_level(0.0)
 
-    def say(self, text: str, on_level: Optional[LevelFn] = None) -> bool:
-        audio = self.synthesize(text)
+    def say(
+        self, text: str, on_level: Optional[LevelFn] = None, mood: str = ""
+    ) -> bool:
+        audio = self.synthesize(text, mood)
         if not audio:
             return False
         try:

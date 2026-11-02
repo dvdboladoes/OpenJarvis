@@ -32,6 +32,23 @@ Para mandarlo a dormir: «Gracias, Jarvis», «Eso es todo» o «Descansa». Si 
 le hablas durante un rato, vuelve a reposo solo. También puedes pulsar el
 núcleo de la interfaz o escribirle abajo.
 
+## La interfaz
+
+- **Núcleo 3D:** pulsa la esfera para el briefing. Cambia de color según la
+  emoción con la que habla Jarvis.
+- **Espacio** (o el botón del micro): hablar sin palmadas.
+- **Ctrl + K:** paleta de comandos (temporizadores, notas, voz, pantalla…).
+- **C:** conversación completa · **V:** voz y ajustes · **H:** modo cine ·
+  **F:** pantalla completa · **Esc:** interrumpir.
+- **Temporizadores y notas:** dile «pon un temporizador de 10 minutos» o
+  «apunta que…», o úsalos desde los paneles.
+- **Voz:** en el panel de voz eliges entre varias voces gratuitas y las
+  pruebas al momento; tu elección se guarda.
+
+Jarvis recuerda la conversación entre sesiones (puedes borrarla desde
+Ajustes) y adapta su tono al tuyo: si le hablas de broma, bromea; si vas en
+serio, se pone serio.
+
 ## Configuración
 
 El archivo es `C:\Users\<tú>\.openjarvis\jarvis.toml` y se crea solo la
