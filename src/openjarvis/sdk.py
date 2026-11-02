@@ -415,6 +415,8 @@ class Jarvis:
                     **engine_kwargs,
                 ):
                     q.put(("token", token))
+            except _asyncio.CancelledError:
+                pass
             except BaseException as exc:  # noqa: BLE001 - re-raised in caller
                 q.put(("error", exc))
             finally:
@@ -422,15 +424,24 @@ class Jarvis:
 
         import asyncio as _asyncio
 
-        _asyncio.run_coroutine_threadsafe(_pump(), self._stream_loop._loop)  # noqa: SLF001
-        while True:
-            kind, value = q.get()
-            if kind == "token":
-                yield value
-            elif kind == "error":
-                raise value
-            else:
-                return
+        future = _asyncio.run_coroutine_threadsafe(
+            _pump(),
+            self._stream_loop._loop,  # noqa: SLF001
+        )
+        try:
+            while True:
+                kind, value = q.get()
+                if kind == "token":
+                    yield value
+                elif kind == "error":
+                    raise value
+                else:
+                    return
+        finally:
+            # Caller stopped early (interrupted): cancel the HTTP stream so the
+            # engine stops generating instead of finishing in the background.
+            if not future.done():
+                future.cancel()
 
     async def ask_stream(
         self,

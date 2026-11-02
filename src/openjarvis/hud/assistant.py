@@ -90,6 +90,7 @@ class JarvisAssistant:
         self._snapshot_lock = threading.Lock()
         self._state = ""
         self._mood = "neutral"
+        self.brain.cancel_event = self._cancel
 
     # ── public ─────────────────────────────────────────────────────────
 
@@ -304,7 +305,10 @@ class JarvisAssistant:
         while not self._cancel.is_set() and not self._shutdown.is_set():
             self._set_state("escuchando", "Le escucho…")
             try:
-                heard = self.ear.listen(startup_silence=8.0 if first_turn else 6.0)
+                heard = self.ear.listen(
+                    startup_silence=8.0 if first_turn else 6.0,
+                    should_stop=self._cancel.is_set,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("No puedo escuchar: %s", exc)
                 self.hub.publish("notice", text=str(exc))
@@ -407,7 +411,12 @@ class JarvisAssistant:
         said: list[str] = []
         failed = False
         while True:
-            item = audio_q.get()
+            try:
+                item = audio_q.get(timeout=0.2)
+            except queue.Empty:
+                if self._cancel.is_set():
+                    break  # interrupted: don't wait for the model to finish
+                continue
             if item is done:
                 break
             if isinstance(item, Exception):
@@ -471,10 +480,29 @@ class JarvisAssistant:
 
     # ── HUD API ────────────────────────────────────────────────────────
 
+    def interrupt(self, timeout: float = 5.0) -> bool:
+        """Stop whatever Jarvis is doing (speaking, thinking, listening).
+
+        Returns True once the current session has ended and a new one can
+        start, so the user is never locked out by a slow answer.
+        """
+        if not self._session.locked():
+            return True
+        self._cancel.set()
+        self.speaker.stop()
+        deadline = time.monotonic() + timeout
+        while self._session.locked() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return not self._session.locked()
+
     def _api_activate(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.interrupt()
         return {"started": self.wake("interfaz")}
 
     def _api_listen(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        if self._state == "escuchando":
+            return {"started": True}  # already listening to you
+        self.interrupt()
         return {"started": self.wake("ptt")}
 
     def _run_job(self, job: Any) -> bool:
@@ -488,7 +516,7 @@ class JarvisAssistant:
             finally:
                 self._end()
 
-        if self._session.locked():
+        if not self.interrupt():
             return False
         threading.Thread(target=_wrapped, daemon=True).start()
         return True
@@ -506,8 +534,7 @@ class JarvisAssistant:
         return {"started": self._run_job(_job)}
 
     def _api_stop(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
-        self._cancel.set()
-        self.speaker.stop()
+        threading.Thread(target=self.interrupt, daemon=True).start()
         return {"stopped": True}
 
     def _api_refresh(self, _payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -475,3 +475,38 @@ def test_lite_mode_for_local_models() -> None:
     )
     full._model = "qwen3:8b"  # noqa: SLF001
     assert not full.lite and full._engine_options() == {"num_ctx": 8192}  # noqa: SLF001
+
+
+def test_interrupt_frees_a_busy_session() -> None:
+    import threading as _t
+
+    from openjarvis.hud.assistant import JarvisAssistant
+    from openjarvis.hud.brain import Spoken
+    from openjarvis.hud.config import HudConfig
+
+    a = JarvisAssistant(
+        HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
+    )
+    a.speaker.synthesize = lambda text, mood="": b"x"  # type: ignore[method-assign]
+    a.speaker.play = lambda audio, on_level=None: None  # type: ignore[method-assign]
+    gate = _t.Event()
+
+    def slow_model():  # type: ignore[no-untyped-def]
+        yield Spoken("Primera frase.", "serio")
+        gate.wait(30)  # a model that takes "forever" to write the rest
+        yield Spoken("Nunca llega.", "serio")
+
+    assert a._begin()  # noqa: SLF001
+    worker = _t.Thread(
+        target=lambda: (a._say_stream(slow_model(), lambda: ""), a._end())
+    )  # noqa: SLF001
+    worker.start()
+    import time as _time
+
+    _time.sleep(0.3)
+    assert a._session.locked()  # noqa: SLF001
+    assert a.interrupt(timeout=3.0)  # returns quickly instead of waiting 30 s
+    gate.set()
+    worker.join(2)
+    a.timers.stop()
+    a.server._httpd.server_close()  # noqa: SLF001

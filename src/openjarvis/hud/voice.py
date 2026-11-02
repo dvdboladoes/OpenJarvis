@@ -311,7 +311,7 @@ class AdaptiveRecorder:
         )
         self.on_level = on_level
 
-    def record(self) -> "Any":
+    def record(self, should_stop: Optional[Callable[[], bool]] = None) -> "Any":
         import numpy as np
         import sounddevice as sd
 
@@ -325,6 +325,8 @@ class AdaptiveRecorder:
             samplerate=self.sample_rate, channels=1, dtype="float32", blocksize=block
         ) as stream:
             for _ in range(hard_cap):
+                if should_stop is not None and should_stop():
+                    return np.zeros(0, dtype=np.float32)
                 data, _ = stream.read(block)
                 chunk = np.asarray(data, dtype=np.float32).reshape(-1)
                 rms = float(np.sqrt(np.mean(chunk * chunk)) + 1e-7)
@@ -398,7 +400,11 @@ class Ear:
         """Load the speech model in advance so the first reply is fast."""
         self._resolve()
 
-    def listen(self, startup_silence: float = 6.0) -> str:
+    def listen(
+        self,
+        startup_silence: float = 6.0,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> str:
         if not self._resolve():
             raise RuntimeError(
                 "No hay reconocimiento de voz disponible. "
@@ -407,7 +413,7 @@ class Ear:
         t0 = time.monotonic()
         audio = AdaptiveRecorder(
             startup_timeout=startup_silence, on_level=self.on_level
-        ).record()
+        ).record(should_stop)
         t1 = time.monotonic()
         self.last_timing = {"grabacion": t1 - t0, "audio": len(audio) / 16000}
         if len(audio) < 16000 * 0.4:  # < 0.4 s → nothing said

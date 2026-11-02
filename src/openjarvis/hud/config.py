@@ -33,7 +33,7 @@ ciudad = ""              # Para el tiempo en el briefing (opcional). Ej: "Irún"
 [activacion]
 palmadas = true          # Dos palmadas seguidas lo despiertan
 palabra_clave = true     # Decir "Hey Jarvis" lo despierta
-sensibilidad_palmadas = 0.5   # 0.1 = solo palmadas muy fuertes, 0.9 = muy sensible
+sensibilidad_palmadas = 0.35  # 0.1 = solo palmadas muy fuertes, 0.9 = muy sensible
 sensibilidad_palabra = 0.5    # 0.1 = estricto, 0.9 = se activa con facilidad
 
 [voz]
@@ -107,7 +107,7 @@ class HudConfig:
 
     palmadas: bool = True
     palabra_clave: bool = True
-    sensibilidad_palmadas: float = 0.5
+    sensibilidad_palmadas: float = 0.35
     sensibilidad_palabra: float = 0.5
 
     motor_voz: str = "edge"

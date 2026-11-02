@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from datetime import datetime
 from typing import TYPE_CHECKING, Iterator, List, Optional
 
@@ -312,6 +313,9 @@ class JarvisBrain:
         self.last_reply = ""
         self.last_mood = "neutral"
         self._memory_path = memory_path
+        # Set by the assistant; checked on every token so an interruption
+        # stops generation immediately.
+        self.cancel_event: Optional["threading.Event"] = None
         self._load_memory()
 
     # -- memory across sessions ------------------------------------------
@@ -549,16 +553,26 @@ class JarvisBrain:
             temperature=self.cfg.temperatura,
             **self._engine_options(),
         )
-        for token in tokens:
-            for sentence in splitter.feed(token):
+        interrupted = False
+        try:
+            for token in tokens:
+                if self.cancel_event is not None and self.cancel_event.is_set():
+                    interrupted = True
+                    break
+                for sentence in splitter.feed(token):
+                    spoken.append(sentence)
+                    yield sentence
+        finally:
+            close = getattr(tokens, "close", None)
+            if close is not None:
+                close()  # cancels the engine stream if we stopped early
+        if not interrupted:
+            for sentence in splitter.flush():
                 spoken.append(sentence)
                 yield sentence
-        for sentence in splitter.flush():
-            spoken.append(sentence)
-            yield sentence
         self.last_mood = splitter.mood
         reply = " ".join(spoken) or "Disculpe, no he podido procesar eso."
-        if not spoken:
+        if not spoken and not interrupted:
             yield Spoken(reply)
         if remember:
             self._remember(user_text, reply)
