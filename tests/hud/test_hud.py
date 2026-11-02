@@ -594,3 +594,24 @@ def test_endpoint_keeps_speech_that_starts_immediately() -> None:
     rms += [0.01] * 60
     verdict, t = _endpoint(rms)
     assert verdict == "end" and t is not None and t > 1.5
+
+
+def test_hallucination_filter() -> None:
+    from openjarvis.hud.voice import is_hallucination
+
+    assert is_hallucination("Subtítulos realizados por la comunidad de Amara.org")
+    assert is_hallucination("Gracias.")
+    assert is_hallucination("")
+    assert not is_hallucination("¿Qué tal estás, Jarvis?")
+
+
+def test_system_prompt_is_stable_between_questions() -> None:
+    from openjarvis.hud.brain import JarvisBrain
+    from openjarvis.hud.config import HudConfig
+
+    b = JarvisBrain(HudConfig(), memory_path="/nonexistent/m.json")
+    b._model = "qwen3:1.7b"  # noqa: SLF001
+    p1 = b.system_prompt()
+    import re as _re
+
+    assert not _re.search(r"\b\d{1,2}:\d{2}\b", p1)  # no clock time → cacheable

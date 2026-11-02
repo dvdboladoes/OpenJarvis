@@ -176,10 +176,30 @@ class Speaker:
             return False
 
 
-WHISPER_PROMPT = (
-    "Conversación en español con Jarvis, un asistente personal. "
-    "Hola Jarvis, ¿qué tengo hoy en la agenda? ¿Cuántos leads han entrado?"
+# Whisper hallucinates these on silence or unclear audio. (An earlier version
+# passed example questions as the initial prompt; Whisper then "heard" those
+# same questions whenever the audio was poor, so Jarvis always answered the
+# same thing. Only the name is hinted now, via hotwords.)
+HALLUCINATIONS = (
+    "subtítulos",
+    "subtitulos",
+    "amara.org",
+    "gracias por ver",
+    "suscríbete",
+    "suscribete",
+    "gracias por su atención",
+    "música",
+    "¡gracias!",
 )
+
+
+def is_hallucination(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return True
+    if t in ("gracias.", "gracias", "¡gracias.", "...", "."):
+        return True
+    return len(t) < 80 and any(h in t for h in HALLUCINATIONS)
 
 
 def _cuda_available() -> bool:
@@ -463,15 +483,11 @@ class Ear:
             beam_size=getattr(self, "_beam", 2),
             vad_filter=True,
             condition_on_previous_text=False,
-            initial_prompt=WHISPER_PROMPT,
+            hotwords="Jarvis",
             without_timestamps=True,
         )
         text = " ".join(seg.text.strip() for seg in segments).strip()
-        # Whisper sometimes hallucinates the prompt or stock phrases on silence.
-        junk = ("subtítulos", "gracias por ver", "amara.org", WHISPER_PROMPT[:30])
-        if any(j.lower() in text.lower() for j in junk) and len(text) < 80:
-            return ""
-        return text
+        return "" if is_hallucination(text) else text
 
 
 __all__ = [

@@ -303,7 +303,10 @@ class JarvisAssistant:
     def _conversation(self, first_turn: bool = False) -> None:
         silences = 0
         while not self._cancel.is_set() and not self._shutdown.is_set():
-            self._set_state("escuchando", "Le escucho…")
+            self._set_state(
+                "escuchando",
+                "No le he oído bien, repita por favor…" if silences else "Le escucho…",
+            )
             try:
                 heard = self.ear.listen(
                     startup_silence=8.0 if first_turn else 6.0,

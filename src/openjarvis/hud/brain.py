@@ -541,7 +541,10 @@ class JarvisBrain:
         quien = self.cfg.nombre or "tu usuario"
         persona = PERSONA_LITE if self.lite else PERSONA
         base = persona.format(quien=quien, tratamiento=self.cfg.honorific)
-        hoy = f"Hoy es {fecha_hablada()} y son las {datetime.now():%H:%M}."
+        # No clock time here: the system prompt must stay identical between
+        # questions so Ollama can reuse its cached prefix (big speed-up on a
+        # CPU). The current time travels with each user message instead.
+        hoy = f"Hoy es {fecha_hablada()}."
         datos = self._facts or "(Sin datos todavía.)"
         if self._notes:
             datos += f"\n\nNOTAS QUE TE HA PEDIDO APUNTAR:\n{self._notes}"
@@ -563,7 +566,11 @@ class JarvisBrain:
                     content=content,
                 )
             )
-        messages.append(Message(role=Role.USER, content=user_text))
+        messages.append(
+            Message(
+                role=Role.USER, content=f"(Son las {datetime.now():%H:%M}) {user_text}"
+            )
+        )
         return model, messages
 
     def _remember(self, user_text: Optional[str], reply: str) -> None:

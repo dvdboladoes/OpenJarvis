@@ -60,7 +60,7 @@ class Snapshot:
 
     def as_prompt(self) -> str:
         """Plain-text facts for the language model."""
-        parts = [f"FECHA Y HORA: {self.generado.strftime('%A %d/%m/%Y %H:%M')}"]
+        parts = [f"FECHA: {self.generado.strftime('%d/%m/%Y')}"]
         if self.tiempo:
             parts.append(f"TIEMPO: {self.tiempo}")
         for name, lines in self.secciones.items():
