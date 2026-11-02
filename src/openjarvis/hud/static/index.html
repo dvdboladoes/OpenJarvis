@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>J.A.R.V.I.S.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --void: #02070d;
+  --deep: #061524;
+  --line: rgba(84, 214, 255, 0.22);
+  --line-strong: rgba(84, 214, 255, 0.55);
+  --cyan: #54d6ff;
+  --cyan-hot: #c9f4ff;
+  --amber: #ffb54a;
+  --red: #ff5d5d;
+  --text: #d7eef7;
+  --muted: #6f93a6;
+  --display: "Rajdhani", "Segoe UI", system-ui, sans-serif;
+  --body: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --accent: var(--cyan);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background:
+    radial-gradient(ellipse 60% 55% at 50% 46%, rgba(30, 120, 170, 0.20), transparent 70%),
+    radial-gradient(circle at 50% 120%, rgba(20, 70, 110, 0.35), transparent 55%),
+    var(--void);
+  color: var(--text);
+  font-family: var(--body);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+body[data-state="pensando"] { --accent: var(--amber); }
+body[data-state="error"] { --accent: var(--red); }
+
+/* faint scanlines + grid, the holographic glass */
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(120, 220, 255, 0.025) 0 1px, transparent 1px 3px),
+    linear-gradient(rgba(84, 214, 255, 0.035) 1px, transparent 1px) 0 0 / 64px 64px,
+    linear-gradient(90deg, rgba(84, 214, 255, 0.035) 1px, transparent 1px) 0 0 / 64px 64px;
+  mask-image: radial-gradient(ellipse at center, #000 30%, transparent 85%);
+}
+
+.hud {
+  position: relative; z-index: 1; height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(250px, 1fr) minmax(380px, 1.5fr) minmax(250px, 1fr);
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "top top top"
+    "left core right"
+    "bottom bottom bottom";
+  gap: 18px 28px;
+  padding: 22px 32px 20px;
+}
+
+/* ── top bar ─────────────────────────────────────── */
+.top { grid-area: top; display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+.brand { font-family: var(--display); font-weight: 700; font-size: 26px; letter-spacing: 0.42em; color: var(--cyan-hot);
+  text-shadow: 0 0 18px rgba(84, 214, 255, 0.6); line-height: 1; }
+.brand small { display: block; font-weight: 500; font-size: 12px; letter-spacing: 0.08em; color: var(--muted); margin-top: 8px; }
+.clock { text-align: right; font-family: var(--display); line-height: 1; }
+.clock .time { font-size: 46px; font-weight: 500; letter-spacing: 0.04em; color: var(--text); font-variant-numeric: tabular-nums; }
+.clock .date { font-size: 15px; color: var(--muted); margin-top: 6px; letter-spacing: 0.04em; }
+.clock .weather { color: var(--cyan); }
+
+/* ── panels with HUD corner brackets ─────────────── */
+.col { display: flex; flex-direction: column; gap: 18px; min-height: 0; }
+.left { grid-area: left; } .right { grid-area: right; }
+.panel {
+  position: relative; padding: 16px 18px 14px; min-height: 0; overflow: hidden;
+  background: linear-gradient(160deg, rgba(10, 40, 62, 0.42), rgba(4, 16, 28, 0.28));
+  border: 1px solid var(--line);
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+}
+.panel::before, .panel::after { content: ""; position: absolute; width: 14px; height: 14px; border: 2px solid var(--line-strong); }
+.panel::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; }
+.panel::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+.panel.grow { flex: 1; display: flex; flex-direction: column; }
+.panel h2 {
+  margin: 0 0 12px; font-family: var(--display); font-weight: 600; font-size: 17px; letter-spacing: 0.06em;
+  color: var(--cyan); display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+}
+.panel h2 .count { font-size: 13px; font-weight: 500; color: var(--muted); }
+.list { list-style: none; margin: 0; padding: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.list li { position: relative; padding: 7px 0 7px 16px; font-size: 14px; line-height: 1.4; color: var(--text); border-top: 1px solid rgba(84, 214, 255, 0.08); }
+.list li:first-child { border-top: 0; }
+.list li::before { content: ""; position: absolute; left: 0; top: 14px; width: 6px; height: 6px; border: 1px solid var(--cyan); transform: rotate(45deg); }
+.empty { color: var(--muted); font-size: 14px; line-height: 1.5; }
+.list li.no-mark { padding-left: 0; }
+.list li.no-mark::before { display: none; }
+.empty code { color: var(--cyan); font-size: 13px; }
+
+/* metrics */
+.metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.metric { padding: 10px 12px; border-left: 2px solid var(--line-strong); background: rgba(84, 214, 255, 0.04); }
+.metric .v { font-family: var(--display); font-size: 30px; font-weight: 600; line-height: 1; color: var(--cyan-hot); font-variant-numeric: tabular-nums; }
+.metric .n { font-size: 13px; color: var(--muted); margin-top: 5px; }
+.metric .c { font-family: var(--display); font-size: 14px; font-weight: 600; margin-left: 6px; }
+.metric .c.up { color: #6dffb3; } .metric .c.down { color: var(--red); }
+
+/* systems */
+.systems { display: grid; grid-template-columns: auto 1fr; gap: 7px 14px; font-size: 14px; }
+.systems dt { color: var(--muted); } .systems dd { margin: 0; text-align: right; font-family: var(--display); font-weight: 600; letter-spacing: 0.03em; }
+.ok { color: #6dffb3; } .off { color: var(--muted); } .bad { color: var(--red); }
+
+/* ── core / reactor ──────────────────────────────── */
+.core { grid-area: core; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; gap: 6px; }
+.reactor-wrap { position: relative; width: min(100%, 58vh); aspect-ratio: 1; }
+#reactor { width: 100%; height: 100%; display: block; cursor: pointer; border-radius: 50%; }
+#reactor:focus-visible { outline: 2px solid var(--cyan); outline-offset: 6px; }
+.state {
+  font-family: var(--display); font-size: 22px; font-weight: 600; letter-spacing: 0.22em; color: var(--accent);
+  text-shadow: 0 0 14px color-mix(in srgb, var(--accent) 60%, transparent); min-height: 28px; text-align: center;
+}
+.hint { font-size: 14px; color: var(--muted); min-height: 20px; text-align: center; }
+.caption {
+  max-width: 640px; min-height: 52px; text-align: center; font-size: 19px; line-height: 1.45; color: var(--text);
+  font-family: var(--body);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden;
+}
+.caption.user { color: var(--cyan); }
+
+/* ── bottom: log + input ─────────────────────────── */
+.bottom { grid-area: bottom; display: grid; grid-template-columns: 1fr minmax(300px, 520px); gap: 28px; align-items: end; }
+.log { display: flex; flex-direction: column; gap: 4px; max-height: 92px; overflow: hidden; mask-image: linear-gradient(transparent, #000 45%); justify-content: flex-end; }
+.log p { margin: 0; font-size: 13px; line-height: 1.4; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.log p b { font-family: var(--display); font-weight: 600; margin-right: 8px; letter-spacing: 0.05em; }
+.log p.jarvis b { color: var(--cyan); } .log p.user b { color: var(--text); }
+form.ask { display: flex; gap: 10px; }
+form.ask input {
+  flex: 1; min-width: 0; background: rgba(6, 26, 42, 0.7); border: 1px solid var(--line); color: var(--text);
+  font: 15px var(--body); padding: 11px 14px; outline: none;
+}
+form.ask input:focus { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan), 0 0 18px rgba(84, 214, 255, 0.25); }
+form.ask input::placeholder { color: var(--muted); }
+button {
+  font: 600 15px var(--display); letter-spacing: 0.08em; color: var(--void); background: var(--cyan);
+  border: 0; padding: 0 18px; cursor: pointer; clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+}
+button.ghost { background: transparent; color: var(--cyan); box-shadow: inset 0 0 0 1px var(--line-strong); clip-path: none; }
+button:hover { filter: brightness(1.15); }
+button:focus-visible { outline: 2px solid var(--cyan-hot); outline-offset: 3px; }
+
+.toast {
+  position: fixed; left: 50%; top: 18px; transform: translate(-50%, -160%); visibility: hidden; z-index: 5;
+  transition: transform .35s ease, visibility 0s linear .35s;
+  background: rgba(40, 24, 4, 0.92); border: 1px solid var(--amber); color: #ffe2b3; padding: 10px 16px; font-size: 14px; max-width: 80vw;
+}
+.toast.show { transform: translate(-50%, 0); visibility: visible; transition: transform .35s ease; }
+
+/* boot sequence: the one orchestrated moment */
+.boot .panel, .boot .top, .boot .bottom { opacity: 0; }
+.panel, .top, .bottom { transition: opacity .6s ease .1s; }
+.ready .left .panel:nth-child(2), .ready .right .panel:nth-child(2) { transition-delay: .35s; }
+
+@media (max-width: 1000px) {
+  body { overflow: auto; }
+  .hud { height: auto; min-height: 100vh; grid-template-columns: 1fr; grid-template-areas: "top" "core" "left" "right" "bottom"; padding: 16px; }
+  .reactor-wrap { width: min(86vw, 420px); }
+  .bottom { grid-template-columns: 1fr; }
+  .panel.grow { flex: none; }
+  .list { overflow: visible; }
+  .clock .time { font-size: 34px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel, .top, .bottom, .toast { transition: none; }
+}
+</style>
+</head>
+<body class="boot" data-state="arrancando">
+<div class="hud">
+  <header class="top">
+    <div class="brand">J.A.R.V.I.S.<small id="greeting">Asistente personal</small></div>
+    <div class="clock">
+      <div class="time" id="time">--:--</div>
+      <div class="date"><span id="date"></span> <span class="weather" id="weather"></span></div>
+    </div>
+  </header>
+
+  <section class="col left">
+    <div class="panel grow">
+      <h2>Agenda de hoy <span class="count" id="agenda-count"></span></h2>
+      <ul class="list" id="agenda"></ul>
+    </div>
+    <div class="panel grow">
+      <h2>Bandeja y tareas <span class="count" id="inbox-count"></span></h2>
+      <ul class="list" id="inbox"></ul>
+    </div>
+  </section>
+
+  <main class="core">
+    <div class="reactor-wrap">
+      <canvas id="reactor" tabindex="0" role="button" aria-label="Activar a Jarvis"></canvas>
+    </div>
+    <div class="state" id="state" aria-live="polite">INICIANDO</div>
+    <div class="hint" id="hint"></div>
+    <div class="caption" id="caption" aria-live="polite"></div>
+  </main>
+
+  <section class="col right">
+    <div class="panel">
+      <h2><span id="metrics-title">Métricas</span> <span class="count" id="metrics-time"></span></h2>
+      <div class="metrics" id="metrics"></div>
+    </div>
+    <div class="panel">
+      <h2>Sistemas</h2>
+      <dl class="systems">
+        <dt>Activación</dt><dd id="sys-wake" class="off">—</dd>
+        <dt>Oído</dt><dd id="sys-ear" class="off">—</dd>
+        <dt>Voz</dt><dd id="sys-voice" class="off">—</dd>
+        <dt>Motor de IA</dt><dd id="sys-engine" class="off">—</dd>
+        <dt>Enlace</dt><dd id="sys-link" class="off">conectando</dd>
+      </dl>
+    </div>
+  </section>
+
+  <footer class="bottom">
+    <div class="log" id="log"></div>
+    <form class="ask" id="ask">
+      <input id="ask-input" autocomplete="off" placeholder="Escribe a Jarvis…" aria-label="Escribe a Jarvis">
+      <button type="submit">Enviar</button>
+      <button type="button" class="ghost" id="stop">Detener</button>
+    </form>
+  </footer>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const STATE_LABEL = {
+    arrancando: "INICIANDO", reposo: "EN ESPERA", activando: "EN LÍNEA", pensando: "PROCESANDO",
+    hablando: "JARVIS", escuchando: "ESCUCHANDO", error: "FALLO",
+  };
+
+  // ── clock ──────────────────────────────────────────────
+  const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+  const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  function tick() {
+    const d = new Date();
+    $("time").textContent = d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+    $("date").textContent = `${dias[d.getDay()]} ${d.getDate()} de ${meses[d.getMonth()]}`;
+    const h = d.getHours();
+    $("greeting").textContent = h < 13 ? "Buenos días" : h < 21 ? "Buenas tardes" : "Buenas noches";
+  }
+  tick(); setInterval(tick, 1000);
+
+  // ── reactor ────────────────────────────────────────────
+  const canvas = $("reactor"), ctx = canvas.getContext("2d");
+  let W = 0, DPR = 1, state = "arrancando";
+  let voice = 0, mic = 0, glow = 0.3, burst = 0, spin = 0;
+  const bars = Array.from({ length: 72 }, () => Math.random());
+  function resize() {
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = canvas.clientWidth; canvas.width = canvas.height = Math.round(W * DPR);
+  }
+  addEventListener("resize", resize); resize();
+  const COLORS = { cyan: [84, 214, 255], amber: [255, 181, 74], red: [255, 93, 93] };
+  const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+  function draw(t) {
+    const c = state === "pensando" ? COLORS.amber : state === "error" ? COLORS.red : COLORS.cyan;
+    const awake = !["reposo", "arrancando"].includes(state);
+    const target = state === "hablando" ? 0.55 + voice * 0.45 : state === "escuchando" ? 0.55 + mic * 0.4
+      : awake ? 0.6 : 0.28 + mic * 0.25;
+    glow += (target - glow) * 0.12;
+    burst *= 0.95;
+    const speed = reduceMotion ? 0 : state === "pensando" ? 2.6 : awake ? 1 : 0.35;
+    spin += 0.004 * speed;
+
+    const s = W * DPR, cx = s / 2, R = s * 0.46;
+    ctx.clearRect(0, 0, s, s);
+    ctx.save(); ctx.translate(cx, cx);
+
+    // ambient halo
+    const halo = ctx.createRadialGradient(0, 0, R * 0.1, 0, 0, R * 1.05);
+    halo.addColorStop(0, rgba(c, 0.18 * glow + burst * 0.3));
+    halo.addColorStop(0.55, rgba(c, 0.05 * glow));
+    halo.addColorStop(1, rgba(c, 0));
+    ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(0, 0, R * 1.05, 0, Math.PI * 2); ctx.fill();
+
+    ctx.lineCap = "butt";
+    // 1. outer tick ring
+    ctx.save(); ctx.rotate(spin * 0.6);
+    for (let i = 0; i < 120; i++) {
+      const a = (i / 120) * Math.PI * 2, long = i % 10 === 0;
+      ctx.strokeStyle = rgba(c, long ? 0.75 : 0.28);
+      ctx.lineWidth = (long ? 2.2 : 1.1) * DPR;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * R * 0.95, Math.sin(a) * R * 0.95);
+      ctx.lineTo(Math.cos(a) * R * (long ? 0.885 : 0.915), Math.sin(a) * R * (long ? 0.885 : 0.915));
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 2. segmented arcs, counter-rotating
+    ctx.save(); ctx.rotate(-spin * 1.4);
+    ctx.lineWidth = 5 * DPR;
+    [[0, 0.9], [1.25, 2.1], [2.5, 2.8], [3.3, 4.6], [5.0, 5.9]].forEach(([a0, a1], i) => {
+      ctx.strokeStyle = rgba(c, 0.35 + 0.35 * glow + (i % 2) * 0.1);
+      ctx.beginPath(); ctx.arc(0, 0, R * 0.82, a0, a1); ctx.stroke();
+    });
+    ctx.restore();
+
+    // thin full ring
+    ctx.strokeStyle = rgba(c, 0.25); ctx.lineWidth = 1 * DPR;
+    ctx.beginPath(); ctx.arc(0, 0, R * 0.76, 0, Math.PI * 2); ctx.stroke();
+
+    // 3. radial spectrum bars driven by voice / mic
+    const lvl = state === "hablando" ? voice : state === "escuchando" ? mic : mic * 0.4;
+    ctx.save(); ctx.rotate(spin * 0.25);
+    for (let i = 0; i < bars.length; i++) {
+      const wobble = reduceMotion ? 0.5 : 0.5 + 0.5 * Math.sin(t / 180 + i * 0.9 + bars[i] * 6);
+      const len = R * (0.03 + lvl * 0.16 * (0.35 + 0.65 * wobble) + glow * 0.015);
+      const a = (i / bars.length) * Math.PI * 2;
+      ctx.strokeStyle = rgba(c, 0.35 + 0.6 * Math.min(1, lvl * 1.4));
+      ctx.lineWidth = 3 * DPR;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * R * 0.56, Math.sin(a) * R * 0.56);
+      ctx.lineTo(Math.cos(a) * (R * 0.56 + len), Math.sin(a) * (R * 0.56 + len));
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 4. inner triangle-segment ring (the reactor housing)
+    ctx.save(); ctx.rotate(spin * 2);
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      ctx.fillStyle = rgba(c, 0.12 + 0.3 * glow);
+      ctx.beginPath(); ctx.arc(0, 0, R * 0.48, a + 0.06, a + Math.PI / 5 - 0.06);
+      ctx.arc(0, 0, R * 0.38, a + Math.PI / 5 - 0.1, a + 0.1, true); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+
+    // 5. core
+    const coreR = R * (0.25 + 0.035 * lvl + burst * 0.05);
+    const core = ctx.createRadialGradient(0, 0, 0, 0, 0, coreR);
+    core.addColorStop(0, `rgba(240,252,255,${0.55 + 0.45 * glow})`);
+    core.addColorStop(0.35, rgba(c, 0.55 + 0.4 * glow));
+    core.addColorStop(1, rgba(c, 0));
+    ctx.fillStyle = core; ctx.beginPath(); ctx.arc(0, 0, coreR, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = rgba(c, 0.8); ctx.lineWidth = 1.5 * DPR;
+    ctx.beginPath(); ctx.arc(0, 0, R * 0.3, 0, Math.PI * 2); ctx.stroke();
+
+    ctx.restore();
+    voice *= 0.9; mic *= 0.85;
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+
+  // ── activation chime (Web Audio, no files) ────────────
+  let audioCtx = null;
+  function chime() {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const now = audioCtx.currentTime;
+      [523.25, 783.99, 1046.5].forEach((f, i) => {
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = "sine"; o.frequency.value = f;
+        g.gain.setValueAtTime(0, now + i * 0.09);
+        g.gain.linearRampToValueAtTime(0.12, now + i * 0.09 + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.09 + 0.5);
+        o.connect(g).connect(audioCtx.destination);
+        o.start(now + i * 0.09); o.stop(now + i * 0.09 + 0.55);
+      });
+    } catch (_) {}
+  }
+
+  // ── rendering data ─────────────────────────────────────
+  function fill(listId, items, emptyHtml, countId) {
+    const ul = $(listId); ul.innerHTML = "";
+    if (countId) $(countId).textContent = items.length ? String(items.length) : "";
+    if (!items.length) { ul.innerHTML = `<li class="empty no-mark">${emptyHtml}</li>`; return; }
+    items.slice(0, 12).forEach((t) => { const li = document.createElement("li"); li.textContent = t; ul.appendChild(li); });
+  }
+  function renderSnapshot(s) {
+    fill("agenda", s.agenda || [], 'Sin eventos. Conecta tu calendario con <code>jarvis connect gdrive</code>.', "agenda-count");
+    fill("inbox", [...(s.mensajes || []), ...(s.tareas || []), ...(s.otros || [])], 'Bandeja al día, o Gmail aún sin conectar.', "inbox-count");
+    $("weather").textContent = s.tiempo ? "· " + s.tiempo : "";
+    $("metrics-title").textContent = s.metricas_titulo || "Métricas";
+    const box = $("metrics"); box.innerHTML = "";
+    if (!(s.metricas || []).length) {
+      box.innerHTML = '<p class="empty" style="grid-column:1/-1;margin:0">Añade tus métricas o leads en <code>jarvis.toml</code> (Google Sheets o CSV).</p>';
+    } else {
+      s.metricas.slice(0, 8).forEach((m) => {
+        const d = document.createElement("div"); d.className = "metric";
+        const v = document.createElement("div"); v.className = "v"; v.textContent = m.valor;
+        if (m.cambio) { const c = document.createElement("span"); c.className = "c " + (m.tendencia || ""); c.textContent = m.cambio; v.appendChild(c); }
+        const n = document.createElement("div"); n.className = "n"; n.textContent = m.nombre;
+        d.append(v, n); box.appendChild(d);
+      });
+    }
+    if (s.generado) $("metrics-time").textContent = "act. " + s.generado.slice(11, 16);
+  }
+  function setSys(id, text, cls) { const el = $(id); el.textContent = text; el.className = cls; }
+  function renderStatus(s) {
+    const wake = s.activacion || [];
+    setSys("sys-wake", wake.length ? wake.map((w) => w === "voz" ? "«Hey Jarvis»" : "palmadas").join(" + ") : "solo botón", wake.length ? "ok" : "off");
+    setSys("sys-ear", s.oido ? "listo" : "sin instalar", s.oido ? "ok" : "bad");
+    setSys("sys-voice", s.voz || "—", s.voz && s.voz !== "—" ? "ok" : "bad");
+    setSys("sys-engine", s.motor || "sin conexión", s.motor ? "ok" : "bad");
+  }
+  let captionTimer = null;
+  function caption(text, who) {
+    const el = $("caption"); el.textContent = text; el.className = "caption" + (who === "user" ? " user" : "");
+    clearTimeout(captionTimer);
+    if (text) captionTimer = setTimeout(() => { if (state === "reposo") el.textContent = ""; }, 12000);
+  }
+  function logLine(role, text) {
+    const p = document.createElement("p"); p.className = role;
+    const b = document.createElement("b"); b.textContent = role === "jarvis" ? "JARVIS" : "Tú";
+    p.append(b, document.createTextNode(text)); $("log").appendChild(p);
+    while ($("log").children.length > 8) $("log").firstChild.remove();
+  }
+  function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 7000); }
+
+  // ── events from Jarvis ─────────────────────────────────
+  function connect() {
+    const es = new EventSource("/events");
+    es.onopen = () => setSys("sys-link", "en línea", "ok");
+    es.onerror = () => { setSys("sys-link", "reconectando", "bad"); };
+    es.onmessage = (e) => {
+      const ev = JSON.parse(e.data);
+      switch (ev.type) {
+        case "state":
+          state = ev.state; document.body.dataset.state = ev.state;
+          $("state").textContent = STATE_LABEL[ev.state] || ev.state.toUpperCase();
+          $("hint").textContent = ev.label || "";
+          if (ev.state === "reposo" || ev.state === "escuchando") { /* keep caption */ }
+          if (ev.state !== "arrancando") document.body.classList.replace("boot", "ready");
+          break;
+        case "wake": burst = 1; chime(); break;
+        case "level": if (ev.source === "voz") voice = Math.max(voice, ev.value); else mic = Math.max(mic, ev.value); break;
+        case "message": logLine(ev.role, ev.text); caption(ev.text, ev.role); break;
+        case "snapshot": renderSnapshot(ev); break;
+        case "status": renderStatus(ev); break;
+        case "notice": toast(ev.text); break;
+      }
+    };
+  }
+  connect();
+  setTimeout(() => document.body.classList.replace("boot", "ready"), 2500);
+
+  // ── controls ───────────────────────────────────────────
+  const post = (path, body) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
+    .then((r) => r.json()).catch(() => ({ ok: false }));
+  function activate() { if (audioCtx && audioCtx.state === "suspended") audioCtx.resume(); post("/api/activate"); }
+  canvas.addEventListener("click", activate);
+  canvas.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(); } });
+  $("stop").addEventListener("click", () => post("/api/stop"));
+  $("ask").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = $("ask-input"), text = input.value.trim(); if (!text) return;
+    post("/api/ask", { text }).then((r) => { if (r.ok && r.result && !r.result.started) toast("Jarvis está ocupado, espera a que termine."); });
+    input.value = "";
+  });
+})();
+</script>
+</body>
+</html>

@@ -335,6 +335,44 @@ class Jarvis:
             "engine": self._resolved_engine_key,
         }
 
+    def chat(
+        self,
+        messages: List[Message],
+        *,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """Run a multi-turn completion over an explicit message list.
+
+        Unlike :meth:`ask`, the caller owns the conversation: the system
+        prompt and prior turns are passed in verbatim. Used by the voice HUD,
+        which keeps its own Spanish persona prompt and rolling history.
+        """
+        self._ensure_engine()
+        if temperature is None:
+            temperature = self._config.intelligence.temperature
+        if max_tokens is None:
+            max_tokens = self._config.intelligence.max_tokens
+
+        model_name = model or self._model_override
+        if model_name is None:
+            last_user = next(
+                (m.content for m in reversed(messages) if m.role == Role.USER), ""
+            )
+            model_name = self._resolve_model(last_user or "")
+        if not model_name:
+            models = self._engine.list_models()
+            model_name = models[0] if models else "default"
+
+        result = self._engine.generate(
+            list(messages),
+            model=model_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return result.get("content", "") or ""
+
     async def ask_stream(
         self,
         query: str,

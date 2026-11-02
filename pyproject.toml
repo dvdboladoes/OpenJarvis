@@ -116,6 +116,19 @@ voice = [
     "sounddevice>=0.5",  # play_wav / record_until_silence in speech/voice_io.py
     "numpy>=1.24",
 ]
+# `jarvis hud`: always-on voice assistant. Double-clap detection needs only
+# numpy; "Hey Jarvis" uses openWakeWord's pre-trained model (ONNX runtime);
+# edge-tts provides free Spanish neural voices. Pair with the `desktop` extra
+# for Whisper speech recognition.
+hud = [
+    # openwakeword hard-depends on tflite-runtime on Linux, which ships no
+    # wheels past cp311; there the HUD falls back to clap / button activation.
+    "openwakeword>=0.6; sys_platform != 'linux' or python_version < '3.12'",
+    "edge-tts>=6.1",
+    "sounddevice>=0.5",
+    "soundfile>=0.12",
+    "numpy>=1.24",
+]
 openhands = ["openhands-sdk>=1.0; python_version >= '3.12'"]
 # Apple Foundation Models (on-device AFM 3). Needs an Apple Silicon Mac on
 # macOS 26+ with Apple Intelligence enabled. The SDK compiles Swift bindings
