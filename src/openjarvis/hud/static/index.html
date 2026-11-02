@@ -142,6 +142,8 @@ body.cinema .left, body.cinema .right { opacity: 0; transform: translateX(var(--
   color: #fff; text-shadow: 0 2px 16px rgba(0,0,0,.9); }
 .subtitles .w { opacity: 0; display: inline-block; transform: translateY(6px); filter: blur(4px); animation: word .38s var(--ease) forwards; }
 @keyframes word { to { opacity: 1; transform: none; filter: none; } }
+.timing { margin-top: 6px; font: 500 11px/1 var(--display, monospace); letter-spacing: .12em; color: var(--accent); opacity: .55; }
+.timing[hidden] { display: none; }
 .subtitles.user { color: var(--accent); font-style: italic; }
 
 /* ── bottom bar ─────────────────────────────────────── */
@@ -295,6 +297,7 @@ body.mini .tools { gap: 6px; }
     <div class="moodtag" id="moodtag" hidden><i></i><span id="moodname"></span></div>
     <div class="watchtag"><i></i>VIENDO TU PANTALLA</div>
     <div class="subtitles" id="subs" aria-live="polite"></div>
+    <div class="timing" id="timing" hidden></div>
   </main>
 
   <aside class="right">
@@ -686,7 +689,7 @@ body.mini .tools { gap: 6px; }
 
   // ── ears: Edge / Chrome speech recognition (instant, accurate) ─
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null, wantListen = false, recRunning = false, recErrors = 0;
+  let rec = null, wantListen = false, recRunning = false, recErrors = 0, recSent = false, recTimer = 0;
   function recStart() {
     if (!SR) { post("stt_unsupported"); return; }
     wantListen = true;
@@ -702,21 +705,26 @@ body.mini .tools { gap: 6px; }
         else if (e.error === "audio-capture") toast("No encuentro ningún micrófono.");
       };
       rec.onresult = (e) => {
-        recErrors = 0; let fin = "", inter = "";
-        for (let i = e.resultIndex; i < e.results.length; i++) { const r = e.results[i]; (r.isFinal ? (fin += r[0].transcript) : (inter += r[0].transcript)); }
-        if (inter.trim()) {
-          if (state === "reposo") { document.body.dataset.state = "escuchando"; $("state").textContent = "ESCUCHANDO"; }
-          subtitles(inter.trim(), "user"); mic = Math.max(mic, .55 + Math.random() * .35);
-        }
-        if (fin.trim()) {
-          const t = fin.trim(); subtitles(t, "user"); wantListen = false; try { rec.stop(); } catch (_) {}
-          post("heard", { text: t }).then((r) => { if (!(r && r.ok && r.result && r.result.ok)) recStart(); });
-        }
+        recErrors = 0; let all = "", inter = "", anyFinal = false;
+        for (let i = 0; i < e.results.length; i++) { const r = e.results[i]; all += r[0].transcript; if (r.isFinal) anyFinal = true; else if (i >= e.resultIndex) inter += r[0].transcript; }
+        const t = all.trim(); if (!t || recSent) return;
+        if (state === "reposo") { document.body.dataset.state = "escuchando"; $("state").textContent = "ESCUCHANDO"; }
+        subtitles(t, "user"); mic = Math.max(mic, .55 + Math.random() * .35);
+        clearTimeout(recTimer);
+        // Send as soon as you stop talking (~0.7 s) instead of waiting for the
+        // browser to close the sentence, which can take 1-2 s more.
+        if (anyFinal && !inter.trim()) recSend(t); else recTimer = setTimeout(() => recSend(t), 700);
       };
     }
+    recSent = false;
     try { rec.start(); } catch (_) {}
   }
-  function recStop() { wantListen = false; if (rec && recRunning) { try { rec.abort(); } catch (_) {} } }
+  function recSend(t) {
+    if (recSent) return; recSent = true; clearTimeout(recTimer); wantListen = false;
+    try { rec.abort(); } catch (_) {}
+    post("heard", { text: t }).then((r) => { if (!(r && r.ok && r.result && r.result.ok)) recStart(); });
+  }
+  function recStop() { clearTimeout(recTimer); wantListen = false; if (rec && recRunning) { try { rec.abort(); } catch (_) {} } }
 
   // ── events from Jarvis ────────────────────────────────────────
   let stateSince = Date.now(), baseSub = "";
@@ -746,6 +754,7 @@ body.mini .tools { gap: 6px; }
       case "screen_watch": setWatching(ev.on); break;
       case "listen": (ev.on && micOn) ? recStart() : recStop(); if (!ev.on && state === "escuchando") { /* server took over */ } break;
       case "camera_request": camFrame(ev.id); break;
+      case "timing": { const txt = `⏱ ${ev.total}s · cerebro ${ev.cerebro}s · voz ${ev.voz}s`; tickerLines.unshift(txt); $("timing").textContent = txt; $("timing").hidden = false; break; }
       case "pc": tickerLines.unshift(ev.texto || "Acción ejecutada"); typeTicker(ev.texto || ""); break;
     }
   }

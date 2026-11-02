@@ -359,6 +359,7 @@ class SentenceSplitter:
         self._buf = ""
         self._in_think = False
         self.mood = "neutral"
+        self._emitted = 0
 
     def _take_moods(self, sentence: str) -> str:
         """Remove [emotion] tags, remembering the last one as current mood."""
@@ -428,6 +429,16 @@ class SentenceSplitter:
                 ready, self._buf = self._buf, ""
             self._buf = self._strip_think(ready) + self._buf
         out: List[str] = []
+        if self._emitted == 0 and not self._in_think:
+            # Speak sooner: cut the very first sentence at a comma once it is
+            # long enough, so the voice can start while the model keeps writing.
+            m = re.match(r"(.{28,}?[,;])\s+(?=\S)", self._buf)
+            if m and not re.search(r"[.!?…:]\s", m.group(1)):
+                cleaned = clean_for_speech(self._take_moods(m.group(1)))
+                self._buf = self._buf[m.end() :]
+                if cleaned:
+                    self._emitted += 1
+                    out.append(Spoken(cleaned, self.mood))
         while True:
             m = self._END.match(self._buf)
             if not m:
@@ -439,6 +450,7 @@ class SentenceSplitter:
             self._buf = self._buf[m.end() :]
             cleaned = clean_for_speech(self._take_moods(sentence))
             if cleaned:
+                self._emitted += 1
                 out.append(Spoken(cleaned, self.mood))
         self._buf += hold
         return out_actions + out

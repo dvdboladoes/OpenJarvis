@@ -107,6 +107,7 @@ class JarvisAssistant:
         self._state = ""
         self._mood = "neutral"
         self._screen_watch = False
+        self._t_heard = 0.0
         self.brain.cancel_event = self._cancel
 
     # ── public ─────────────────────────────────────────────────────────
@@ -296,6 +297,21 @@ class JarvisAssistant:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _snapshot_fast(self) -> Optional[Snapshot]:
+        """Use the data already loaded; refresh it in the background if stale.
+
+        Collecting e-mail, calendar and weather can take seconds, which used to
+        be added to every reply.
+        """
+        if self._snapshot is None:
+            return self._get_snapshot()
+        if time.monotonic() - self._snapshot_at > SNAPSHOT_MAX_AGE:
+            if not self._snapshot_lock.locked():
+                threading.Thread(
+                    target=self._get_snapshot, kwargs={"force": True}, daemon=True
+                ).start()
+        return self._snapshot
+
     def _get_snapshot(self, force: bool = False) -> Snapshot:
         with self._snapshot_lock:
             fresh = time.monotonic() - self._snapshot_at < SNAPSHOT_MAX_AGE
@@ -341,11 +357,11 @@ class JarvisAssistant:
             self.hub.publish("wake", source=source)
             if source == "ptt":
                 # Push-to-talk: straight to listening, no briefing.
-                self._get_snapshot()
+                self._snapshot_fast()
                 self._conversation(first_turn=True)
                 return
             self._set_state("activando", "Sistemas en línea")
-            snap = self._get_snapshot()
+            snap = self._snapshot_fast() or Snapshot()
             self._set_state("pensando", "Preparando su briefing…")
             spoken = self._say_stream(
                 self.brain.stream_briefing(source),
@@ -371,6 +387,7 @@ class JarvisAssistant:
             return {"ok": False}
         if self._session.locked():
             return {"ok": False, "busy": True}
+        self._t_heard = time.monotonic()
         self._on_text(text)
         return {"ok": True}
 
@@ -397,7 +414,7 @@ class JarvisAssistant:
                         Spoken(f"A su disposición, {self.cfg.honorific}.", "sereno")
                     )
                     return
-                self._get_snapshot()
+                self._snapshot_fast()
                 self._answer(text)
             except Exception:  # noqa: BLE001
                 logger.exception("Error respondiendo")
@@ -427,7 +444,7 @@ class JarvisAssistant:
                         Spoken(f"A su disposición, {self.cfg.honorific}.", "sereno")
                     )
                     return
-                self._get_snapshot()
+                self._snapshot_fast()
                 self._answer(text)
             except Exception:  # noqa: BLE001
                 logger.exception("Error respondiendo")
@@ -648,10 +665,13 @@ class JarvisAssistant:
         text_q: "queue.Queue[Any]" = queue.Queue()
         audio_q: "queue.Queue[Any]" = queue.Queue(maxsize=3)
         done = object()
+        t_start = time.monotonic()
+        marks: Dict[str, float] = {}
 
         def produce() -> None:
             try:
                 for sentence in sentences:
+                    marks.setdefault("cerebro", time.monotonic())
                     if self._cancel.is_set():
                         break
                     if isinstance(sentence, ActionRequest):
@@ -696,6 +716,9 @@ class JarvisAssistant:
                 failed = True
                 break
             sentence, audio = item
+            if "voz" not in marks:
+                marks["voz"] = time.monotonic()
+                self._report_timing(t_start, marks)
             said.append(str(sentence))
             self._set_mood(getattr(sentence, "mood", "neutral"))
             if self._state != "hablando":
@@ -715,6 +738,23 @@ class JarvisAssistant:
         if failed:
             self._say(fallback())
         return not failed
+
+    def _report_timing(self, t_start: float, marks: Dict[str, float]) -> None:
+        """Show where the waiting time went (brain vs. voice)."""
+        brain = marks.get("cerebro", t_start) - t_start
+        voice = marks.get("voz", t_start) - marks.get("cerebro", t_start)
+        heard = self._t_heard if self._t_heard and self._t_heard <= t_start else t_start
+        total = marks.get("voz", t_start) - heard
+        self._t_heard = 0.0
+        logger.info(
+            "Tiempos: total %.1fs · cerebro %.1fs · voz %.1fs", total, brain, voice
+        )
+        self.hub.publish(
+            "timing",
+            total=round(total, 1),
+            cerebro=round(brain, 1),
+            voz=round(voice, 1),
+        )
 
     def _say(self, text: str) -> None:
         mood = getattr(text, "mood", "neutral")
@@ -806,7 +846,7 @@ class JarvisAssistant:
             return {"started": False}
 
         def _job() -> None:
-            self._get_snapshot()
+            self._snapshot_fast()
             self.hub.publish("message", role="user", text=text)
             self._answer(text)
 
