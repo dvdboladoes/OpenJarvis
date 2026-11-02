@@ -100,6 +100,12 @@ def _ollama_request_options(
         options["num_ctx"] = _default_num_ctx()
     if kwargs.get("num_gpu") is not None:
         options["num_gpu"] = int(kwargs["num_gpu"])
+    # Optional sampler settings (e.g. the Qwen3-recommended top_p/top_k and a
+    # repeat penalty that keeps small models out of loops).
+    for key in ("top_p", "top_k", "min_p", "repeat_penalty", "presence_penalty",
+                "frequency_penalty", "repeat_last_n"):  # fmt: skip
+        if kwargs.get(key) is not None:
+            options[key] = kwargs[key]
     return options
 
 

@@ -464,7 +464,28 @@ class JarvisBrain:
         """
         if is_cloud_model(self._model or self.cfg.modelo):
             return {}
-        return {"num_ctx": int(self.cfg.contexto or (3072 if self.lite else 8192))}
+        return {
+            "num_ctx": int(self.cfg.contexto or (3072 if self.lite else 8192)),
+            # Sampling recommended for Qwen3 in non-thinking mode, plus a
+            # repeat penalty: small local models otherwise fall into loops
+            # ("token repeat limit reached").
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0.0,
+            "repeat_penalty": 1.15,
+            "presence_penalty": 1.0,
+        }
+
+    @staticmethod
+    def _is_loop_error(exc: Exception) -> bool:
+        return "repeat" in str(exc).lower()
+
+    def _retry_options(self) -> dict:
+        """Harder anti-loop settings for a second attempt."""
+        opts = self._engine_options()
+        if opts:
+            opts.update(repeat_penalty=1.3, presence_penalty=1.5)
+        return opts
 
     def _token_budget(self, requested: int = 0) -> int:
         budget = requested or self.cfg.max_tokens
@@ -499,10 +520,8 @@ class JarvisBrain:
 
         model = self.resolve_model()
         system = self.system_prompt()
-        if "qwen3" in model.lower():
-            # Qwen3's soft switch: skip the long hidden reasoning, which would
-            # otherwise eat the token budget and add seconds of silence.
-            system += "\n/no_think"
+        # Hidden reasoning is disabled through Ollama's ``think: false``; the
+        # old "/no_think" soft switch made small Qwen3 models loop.
         messages = [Message(role=Role.SYSTEM, content=system)]
         keep = 6 if self.lite else self.MAX_HISTORY
         for role, content in self._history[-keep:]:
@@ -524,13 +543,25 @@ class JarvisBrain:
 
     def _complete(self, user_text: str, *, remember: bool = True) -> str:
         model, messages = self._messages(user_text)
-        reply = self._ensure_sdk().chat(
-            messages,
-            model=model,
-            max_tokens=self._token_budget(),
-            temperature=self.cfg.temperatura,
-            **self._engine_options(),
-        )
+        try:
+            reply = self._ensure_sdk().chat(
+                messages,
+                model=model,
+                max_tokens=self._token_budget(),
+                temperature=self.cfg.temperatura,
+                **self._engine_options(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            if not self._is_loop_error(exc):
+                raise
+            logger.warning("El modelo entró en bucle; reintento con más penalización")
+            reply = self._ensure_sdk().chat(
+                messages,
+                model=model,
+                max_tokens=self._token_budget(),
+                temperature=max(0.7, self.cfg.temperatura),
+                **self._retry_options(),
+            )
         splitter = SentenceSplitter()
         reply = " ".join(splitter.feed(reply) + splitter.flush())
         self.last_mood = splitter.mood
@@ -546,26 +577,40 @@ class JarvisBrain:
         model, messages = self._messages(user_text)
         splitter = SentenceSplitter()
         spoken: List[str] = []
-        tokens = self._ensure_sdk().chat_stream(
-            messages,
-            model=model,
-            max_tokens=self._token_budget(max_tokens),
-            temperature=self.cfg.temperatura,
-            **self._engine_options(),
-        )
         interrupted = False
-        try:
-            for token in tokens:
-                if self.cancel_event is not None and self.cancel_event.is_set():
-                    interrupted = True
+        for attempt in range(2):
+            options = self._engine_options() if attempt == 0 else self._retry_options()
+            tokens = self._ensure_sdk().chat_stream(
+                messages,
+                model=model,
+                max_tokens=self._token_budget(max_tokens),
+                temperature=self.cfg.temperatura if attempt == 0 else 0.75,
+                **options,
+            )
+            try:
+                for token in tokens:
+                    if self.cancel_event is not None and self.cancel_event.is_set():
+                        interrupted = True
+                        break
+                    for sentence in splitter.feed(token):
+                        spoken.append(sentence)
+                        yield sentence
+                break
+            except Exception as exc:  # noqa: BLE001
+                if not self._is_loop_error(exc):
+                    raise
+                # The model started repeating itself. If it already said
+                # something useful, stop there; otherwise try once more with
+                # stronger anti-repetition settings.
+                logger.warning("El modelo entró en bucle (intento %d)", attempt + 1)
+                if spoken or attempt == 1:
+                    splitter = SentenceSplitter()  # drop the looping tail
                     break
-                for sentence in splitter.feed(token):
-                    spoken.append(sentence)
-                    yield sentence
-        finally:
-            close = getattr(tokens, "close", None)
-            if close is not None:
-                close()  # cancels the engine stream if we stopped early
+                splitter = SentenceSplitter()
+            finally:
+                close = getattr(tokens, "close", None)
+                if close is not None:
+                    close()  # cancels the engine stream if we stopped early
         if not interrupted:
             for sentence in splitter.flush():
                 spoken.append(sentence)

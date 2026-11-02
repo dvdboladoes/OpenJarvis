@@ -460,7 +460,7 @@ def test_lite_mode_for_local_models() -> None:
     local = JarvisBrain(HudConfig(), memory_path="/nonexistent/mem.json")
     local._model = "qwen3:8b"  # noqa: SLF001
     assert local.lite
-    assert local._engine_options() == {"num_ctx": 3072}  # noqa: SLF001
+    assert local._engine_options()["num_ctx"] == 3072  # noqa: SLF001
     assert local._token_budget(500) == 220  # noqa: SLF001
     assert len(local.system_prompt()) < 2500
 
@@ -474,7 +474,8 @@ def test_lite_mode_for_local_models() -> None:
         HudConfig(modo_cerebro="completo"), memory_path="/nonexistent/m.json"
     )
     full._model = "qwen3:8b"  # noqa: SLF001
-    assert not full.lite and full._engine_options() == {"num_ctx": 8192}  # noqa: SLF001
+    assert not full.lite
+    assert full._engine_options()["num_ctx"] == 8192  # noqa: SLF001
 
 
 def test_interrupt_frees_a_busy_session() -> None:
@@ -510,3 +511,35 @@ def test_interrupt_frees_a_busy_session() -> None:
     worker.join(2)
     a.timers.stop()
     a.server._httpd.server_close()  # noqa: SLF001
+
+
+def test_stream_recovers_from_model_loop() -> None:
+    from openjarvis.hud.brain import JarvisBrain
+    from openjarvis.hud.config import HudConfig
+
+    calls: list = []
+
+    class LoopingSDK:
+        class config:  # noqa: N801
+            class intelligence:  # noqa: N801
+                default_model = "qwen3:1.7b"
+
+        def _ensure_engine(self) -> None:
+            pass
+
+        def chat_stream(self, messages, **kw):  # type: ignore[no-untyped-def]
+            calls.append(kw)
+            if len(calls) == 1:
+                raise RuntimeError(
+                    "Ollama returned 500: prediction aborted, "
+                    "token repeat limit reached"
+                )
+            yield from ["[alegre] ¡Hola, ", "señor!"]
+
+    b = JarvisBrain(HudConfig(), memory_path="/nonexistent/mem.json")
+    b._sdk = LoopingSDK()  # noqa: SLF001
+    b._model = "qwen3:1.7b"  # noqa: SLF001
+    out = list(b.stream_reply("hola"))
+    assert [str(s) for s in out] == ["¡Hola, señor!"]
+    assert calls[1]["repeat_penalty"] > calls[0]["repeat_penalty"]
+    assert "/no_think" not in b.system_prompt()
