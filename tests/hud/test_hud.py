@@ -672,3 +672,86 @@ def test_stream_retries_when_model_copies_last_reply() -> None:
     out = [str(x) for x in b.stream_reply("¿qué tal estás?")]
     assert out == ["¡Muy bien, gracias por preguntar!"]
     assert calls[0] > calls[1]  # second try without history
+
+
+# ── continuous listening ───────────────────────────────────────────────────
+
+
+def _segment(rms_values: list, **kw):  # type: ignore[no-untyped-def]
+    from openjarvis.hud.listening import SpeechSegmenter
+
+    seg = SpeechSegmenter(**kw)
+    out = []
+    for i, r in enumerate(rms_values):
+        frames = seg.feed(r, i)
+        if frames:
+            out.append((frames[0], frames[-1], len(frames)))
+    return out
+
+
+def test_segmenter_finds_each_sentence() -> None:
+    noise = [0.01] * 40
+    speech = [0.15, 0.2, 0.12, 0.18] * 15  # ~1.8 s
+    utts = _segment(noise + speech + [0.01] * 40 + speech + [0.01] * 40)
+    assert len(utts) == 2
+    first_block, last_block, n = utts[0]
+    assert first_block < 40 <= last_block  # pre-roll keeps the first syllable
+    assert n * 0.03 >= 1.8
+
+
+def test_segmenter_ignores_clicks_and_noise() -> None:
+    clicks = ([0.01] * 20 + [0.3] + [0.01] * 20) * 5  # keyboard taps
+    assert _segment([0.01] * 40 + clicks) == []
+    hum = [0.04] * 400  # steady fan noise is learned as the floor
+    assert _segment(hum) == []
+
+
+def test_segmenter_handles_laptop_agc() -> None:
+    # After you stop talking the mic raises its gain: background goes up.
+    rms = [0.01] * 40 + [0.25] * 50 + [0.04] * 60
+    assert len(_segment(rms)) == 1
+
+
+def test_continuous_mode_answers_each_utterance() -> None:
+    import time as _time
+
+    import numpy as _np
+
+    from openjarvis.hud.assistant import JarvisAssistant
+    from openjarvis.hud.brain import Spoken
+    from openjarvis.hud.config import HudConfig
+
+    a = JarvisAssistant(
+        HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
+    )
+
+    class FakeListener:
+        detectors = ["continua"]
+        resumed = 0
+
+        def pause(self) -> None:
+            pass
+
+        def resume(self) -> None:
+            FakeListener.resumed += 1
+
+    a.listener = FakeListener()
+    a.ear._resolve = lambda: True  # type: ignore[method-assign]  # noqa: SLF001
+    a.ear.transcribe = lambda audio: "¿qué tal, Jarvis?"  # type: ignore[method-assign]
+    a._get_snapshot = lambda force=False: None  # type: ignore[method-assign]  # noqa: SLF001
+    said: list = []
+
+    def fake_reply(text):  # type: ignore[no-untyped-def]
+        yield Spoken("¡Muy bien, señor!", "alegre")
+
+    a.brain.stream_reply = fake_reply  # type: ignore[method-assign]
+    a.speaker.synthesize = lambda text, mood="": b"x"  # type: ignore[method-assign]
+    a.speaker.play = lambda audio, on_level=None: said.append("play")  # type: ignore[method-assign]
+    a._on_utterance(_np.zeros(16000, dtype=_np.float32))  # noqa: SLF001
+    for _ in range(50):
+        _time.sleep(0.05)
+        if FakeListener.resumed:
+            break
+    assert said == ["play"] and FakeListener.resumed == 1
+    a.timers.stop()
+    a.server._httpd.server_close()  # noqa: SLF001

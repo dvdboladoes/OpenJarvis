@@ -134,7 +134,31 @@ class JarvisAssistant:
 
     # ── setup ──────────────────────────────────────────────────────────
 
+    @property
+    def continuous(self) -> bool:
+        return (
+            self.cfg.escucha_continua
+            and self.listener is not None
+            and ("continua" in self.listener.detectors)
+        )
+
     def _start_listener(self) -> None:
+        if self.cfg.escucha_continua:
+            from openjarvis.hud.listening import ContinuousListener
+
+            try:
+                self.listener = ContinuousListener(
+                    on_utterance=self._on_utterance,
+                    on_level=self._mic_level,
+                    on_speech_start=self._on_speech_start,
+                    sensitivity=self.cfg.sensibilidad_escucha,
+                )
+                self.listener.start()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Micrófono no disponible: %s", exc)
+                self.listener = None
+            return
+
         from openjarvis.hud.triggers import ClapDetector, MicListener, WakeWordDetector
 
         clap = (
@@ -165,6 +189,7 @@ class JarvisAssistant:
 
     def _warm_up(self) -> None:
         status: Dict[str, Any] = {
+            "continua": self.continuous,
             "activacion": self.listener.detectors if self.listener else [],
             "voz": self.cfg.motor_voz,
         }
@@ -198,6 +223,8 @@ class JarvisAssistant:
             self._set_state("reposo", self._idle_hint())
 
     def _idle_hint(self) -> str:
+        if self.continuous and self._mic_enabled:
+            return "Le escucho: hable cuando quiera"
         ways = []
         if (
             self._mic_enabled
@@ -271,6 +298,8 @@ class JarvisAssistant:
         self._set_mood("neutral")
         self._set_state("reposo", self._idle_hint())
         if self.listener is not None and self._mic_enabled:
+            if self.continuous:
+                time.sleep(0.3)  # let the speakers fall silent first
             self.listener.resume()
         self._session.release()
 
@@ -291,7 +320,7 @@ class JarvisAssistant:
                 self.brain.stream_briefing(source),
                 fallback=lambda: offline_briefing(self.cfg, snap),
             )
-            if spoken:
+            if spoken and not self.continuous:
                 self._conversation()
         except Exception:  # noqa: BLE001
             logger.exception("Error en la sesión de Jarvis")
@@ -299,6 +328,40 @@ class JarvisAssistant:
             time.sleep(2)
         finally:
             self._end()
+
+    def _on_speech_start(self) -> None:
+        if not self._session.locked():
+            self._set_state("escuchando", "Le escucho…")
+
+    def _on_utterance(self, audio: Any) -> None:
+        """Continuous mode: you finished a sentence → transcribe and answer."""
+
+        def _handle() -> None:
+            if not self._begin():
+                return
+            try:
+                self._set_state("pensando", "Entendiendo…")
+                try:
+                    text = self.ear.transcribe(audio) if self.ear.ready else ""
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("No pude transcribir: %s", exc)
+                    text = ""
+                if not text or self._cancel.is_set():
+                    return
+                self.hub.publish("message", role="user", text=text)
+                if is_sleep_command(text):
+                    self._say(
+                        Spoken(f"A su disposición, {self.cfg.honorific}.", "sereno")
+                    )
+                    return
+                self._get_snapshot()
+                self._answer(text)
+            except Exception:  # noqa: BLE001
+                logger.exception("Error respondiendo")
+            finally:
+                self._end()
+
+        threading.Thread(target=_handle, name="jarvis-utterance", daemon=True).start()
 
     def _conversation(self, first_turn: bool = False) -> None:
         silences = 0

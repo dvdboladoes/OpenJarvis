@@ -302,7 +302,7 @@ body.alarm { animation: alarm .5s steps(2) 6; }
   <div class="voices" id="voices"></div>
   <button class="btn ghost" id="b-test">Probar voz</button>
   <h3 style="margin-top:8px">Ajustes</h3>
-  <div class="row">Escuchar palmadas y «Hey Jarvis» <div class="switch on" id="sw-mic" role="switch" aria-checked="true" tabindex="0"></div></div>
+  <div class="row">Micrófono siempre a la escucha <div class="switch on" id="sw-mic" role="switch" aria-checked="true" tabindex="0"></div></div>
   <div class="row">Efectos de sonido <div class="switch on" id="sw-fx" role="switch" aria-checked="true" tabindex="0"></div></div>
   <div class="row">Color según la emoción <div class="switch on" id="sw-mood" role="switch" aria-checked="true" tabindex="0"></div></div>
   <div class="row">Memoria de conversación <button class="btn ghost" id="b-forget">Borrar</button></div>
@@ -334,7 +334,7 @@ body.alarm { animation: alarm .5s steps(2) 6; }
   };
   const STATE = { arrancando: "INICIANDO", reposo: "EN ESPERA", activando: "EN LÍNEA", pensando: "PROCESANDO",
     hablando: "JARVIS", escuchando: "ESCUCHANDO", error: "FALLO" };
-  let state = "arrancando", mood = "neutral", moodColors = true, fx = true, micOn = true;
+  let state = "arrancando", mood = "neutral", moodColors = true, fx = true, micOn = true, continua = false;
   let voice = 0, mic = 0, burst = 0;
   const target = { c: MOODS.neutral.c.slice() }, cur = { c: MOODS.neutral.c.slice() };
 
@@ -613,7 +613,7 @@ body.alarm { animation: alarm .5s steps(2) 6; }
     switch (ev.type) {
       case "state": {
         const prev = state; state = ev.state; document.body.dataset.state = state; stateSince = Date.now();
-        $("state").textContent = STATE[state] || state.toUpperCase(); baseSub = ev.label || ""; $("sub").textContent = baseSub;
+        $("state").textContent = state === "reposo" && continua && micOn ? "A LA ESCUCHA" : (STATE[state] || state.toUpperCase()); baseSub = ev.label || ""; $("sub").textContent = baseSub;
         if (state === "escuchando" && prev !== "escuchando") sfx.listen();
         setMoodColor(mood); if (state !== "arrancando") finishBoot(); break; }
       case "wake": burst = 1; three && three.shock(); setTimeout(() => three && three.shock(), 180); sfx.wake(); $("flash").classList.remove("go"); void $("flash").offsetWidth; $("flash").classList.add("go"); break;
@@ -628,7 +628,7 @@ body.alarm { animation: alarm .5s steps(2) 6; }
       case "notes": renderNotes(ev.items || []); break;
       case "voices": voices = ev.items || []; actual = ev.actual || {}; renderVoices(); break;
       case "mic": micOn = !!ev.on; $("sw-mic").classList.toggle("on", micOn); $("mic").classList.toggle("off", !micOn); break;
-      case "status": tickerLines.unshift(ev.motor ? `Cerebro: ${ev.motor}` : "Cerebro sin conexión"); if (!ev.motor) toast("El cerebro de IA no responde. Revisa Ollama o tu clave de Claude."); break;
+      case "status": continua = !!ev.continua; if (state === "reposo" && continua) $("state").textContent = "A LA ESCUCHA"; tickerLines.unshift(ev.motor ? `Cerebro: ${ev.motor}` : "Cerebro sin conexión"); if (!ev.motor) toast("El cerebro de IA no responde. Revisa Ollama o tu clave de Claude."); break;
       case "alarm": sfx.alarm(); document.body.classList.remove("alarm"); void document.body.offsetWidth; document.body.classList.add("alarm"); toast(`⏰ Temporizador de ${ev.label} terminado`); break;
       case "notice": toast(ev.text); break;
     }

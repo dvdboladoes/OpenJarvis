@@ -31,6 +31,10 @@ tratamiento = "señor"    # Cómo te llama Jarvis: "señor", "jefe", tu nombre..
 ciudad = ""              # Para el tiempo en el briefing (opcional). Ej: "Irún"
 
 [activacion]
+# Escucha continua: el micro está siempre abierto; le hablas y, en cuanto te
+# callas, responde. No hace falta pulsar nada ni dar palmadas.
+escucha_continua = true
+sensibilidad_escucha = 0.5    # 0.1 = solo voz fuerte y clara, 0.9 = capta voz baja
 palmadas = true          # Dos palmadas seguidas lo despiertan
 palabra_clave = true     # Decir "Hey Jarvis" lo despierta
 sensibilidad_palmadas = 0.35  # 0.1 = solo palmadas muy fuertes, 0.9 = muy sensible
@@ -108,6 +112,8 @@ class HudConfig:
     tratamiento: str = "señor"
     ciudad: str = ""
 
+    escucha_continua: bool = True
+    sensibilidad_escucha: float = 0.5
     palmadas: bool = True
     palabra_clave: bool = True
     sensibilidad_palmadas: float = 0.35
@@ -188,6 +194,10 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.tratamiento = str(usuario.get("tratamiento", d.tratamiento) or "")
     d.ciudad = str(usuario.get("ciudad", d.ciudad) or "")
 
+    d.escucha_continua = bool(activ.get("escucha_continua", d.escucha_continua))
+    d.sensibilidad_escucha = _clamp(
+        activ.get("sensibilidad_escucha", d.sensibilidad_escucha), 0.05, 0.95, 0.5
+    )
     d.palmadas = bool(activ.get("palmadas", d.palmadas))
     d.palabra_clave = bool(activ.get("palabra_clave", d.palabra_clave))
     d.sensibilidad_palmadas = _clamp(
