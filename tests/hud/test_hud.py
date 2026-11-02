@@ -543,3 +543,33 @@ def test_stream_recovers_from_model_loop() -> None:
     assert [str(s) for s in out] == ["¡Hola, señor!"]
     assert calls[1]["repeat_penalty"] > calls[0]["repeat_penalty"]
     assert "/no_think" not in b.system_prompt()
+
+
+def test_complete_falls_back_to_thinking_mode() -> None:
+    from openjarvis.hud.brain import JarvisBrain
+    from openjarvis.hud.config import HudConfig
+
+    seen: list = []
+
+    class SDK:
+        class config:  # noqa: N801
+            class intelligence:  # noqa: N801
+                default_model = "qwen3:1.7b"
+
+        def _ensure_engine(self) -> None:
+            pass
+
+        def chat(self, messages, **kw):  # type: ignore[no-untyped-def]
+            seen.append((len(messages), kw))
+            if "think" not in kw:
+                raise RuntimeError("prediction aborted, token repeat limit reached")
+            return "<think>hmm</think>[sereno] Sistemas en línea."
+
+    b = JarvisBrain(HudConfig(), memory_path="/nonexistent/mem.json")
+    b._history = [("user", "x"), ("assistant", "y")]  # noqa: SLF001
+    b._sdk = SDK()  # noqa: SLF001
+    b._model = "qwen3:1.7b"  # noqa: SLF001
+    assert b.reply("estado") == "Sistemas en línea."
+    assert len(seen) == 3
+    assert seen[0][0] > seen[1][0]  # retries drop the history
+    assert seen[2][1]["think"] is None and seen[2][1]["max_tokens"] >= 700
