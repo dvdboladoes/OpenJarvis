@@ -282,3 +282,19 @@ def test_endpoint_times_out_on_silence() -> None:
 def test_endpoint_caps_never_ending_speech() -> None:
     verdict, t = _endpoint([0.01] * 10 + [0.3] * 1000)
     assert verdict == "end" and t <= 12.5
+
+
+def test_engine_choice(monkeypatch) -> None:
+    from openjarvis.hud import brain as brain_mod
+    from openjarvis.hud.config import HudConfig
+
+    monkeypatch.setattr(brain_mod, "ollama_has_models", lambda host="": True)
+    b = brain_mod.JarvisBrain(HudConfig())
+    assert b._engine_for(None) == "ollama"
+    assert b._engine_for("claude-sonnet-5-5") == "cloud"
+    monkeypatch.setattr(brain_mod, "ollama_has_models", lambda host="": False)
+    assert b._engine_for(None) is None
+    assert (
+        brain_mod.JarvisBrain(HudConfig(motor_cerebro="vllm"))._engine_for(None)
+        == "vllm"
+    )

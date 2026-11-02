@@ -58,6 +58,9 @@ modelo = "auto"
 #   "gemini-3-flash"     → GEMINI_API_KEY
 # O un modelo local más grande, ej. "qwen3:14b" (antes: ollama pull qwen3:14b)
 modelo = ""
+# "auto" = Ollama si está en marcha (o la nube para modelos Claude/GPT/Gemini).
+# Otras opciones: "ollama", "cloud", "vllm", "llamacpp"...
+motor = "auto"
 max_tokens = 500
 temperatura = 0.6
 
@@ -110,6 +113,7 @@ class HudConfig:
     modelo_oido: str = "auto"
 
     modelo: str = ""
+    motor_cerebro: str = "auto"
     max_tokens: int = 500
     temperatura: float = 0.6
 
@@ -190,6 +194,7 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.modelo_oido = str(oido.get("modelo", d.modelo_oido) or "auto")
 
     d.modelo = str(cerebro.get("modelo", d.modelo) or "")
+    d.motor_cerebro = str(cerebro.get("motor", d.motor_cerebro) or "auto")
     d.max_tokens = int(_clamp(cerebro.get("max_tokens", d.max_tokens), 64, 4096, 500))
     d.temperatura = _clamp(cerebro.get("temperatura", d.temperatura), 0.0, 1.5, 0.6)
 

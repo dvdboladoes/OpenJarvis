@@ -94,6 +94,24 @@ def is_cloud_model(model: Optional[str]) -> bool:
     return bool(m) and m.startswith(_CLOUD_PREFIXES)
 
 
+def ollama_has_models(host: str = "") -> bool:
+    """True when a local Ollama server answers and has a model installed."""
+    import os
+
+    base = (host or os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip(
+        "/"
+    )
+    if not base.startswith("http"):
+        base = "http://" + base
+    try:
+        import httpx
+
+        resp = httpx.get(f"{base}/api/tags", timeout=3.0)
+        return resp.status_code == 200 and bool(resp.json().get("models"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def pick_installed_model(wanted: str, available: List[str]) -> str:
     """Return *wanted* if installed (ignoring a ``:latest`` tag), else the best
     installed chat model, else ``""``."""
@@ -152,10 +170,27 @@ class JarvisBrain:
             from openjarvis.sdk import Jarvis
 
             model = self.cfg.modelo or None
-            self._sdk = Jarvis(
-                model=model, engine_key="cloud" if is_cloud_model(model) else None
-            )
+            self._sdk = Jarvis(model=model, engine_key=self._engine_for(model))
         return self._sdk
+
+    def _engine_for(self, model: Optional[str]) -> Optional[str]:
+        """Choose the inference engine explicitly.
+
+        ``jarvis init`` may set a default engine that is not installed (e.g.
+        llamacpp); OpenJarvis then falls back to whichever engine answers a
+        health check — possibly a cloud API without credentials (NVIDIA NIM →
+        401). For a voice assistant the predictable choice is: the cloud
+        engine for Claude/GPT/Gemini models, otherwise local Ollama whenever
+        it is running with at least one model.
+        """
+        engine = (self.cfg.motor_cerebro or "auto").lower()
+        if engine != "auto":
+            return engine
+        if is_cloud_model(model):
+            return "cloud"
+        if ollama_has_models():
+            return "ollama"
+        return None
 
     def resolve_model(self) -> str:
         """Pick a model that the engine can actually serve.
