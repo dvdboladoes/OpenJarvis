@@ -423,6 +423,14 @@ button:focus-visible { outline: 2px solid var(--cyan-hot); outline-offset: 3px; 
   }
   function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 7000); }
 
+  // elapsed seconds while thinking, so a slow local model visibly works
+  let baseHint = "", stateSince = Date.now();
+  setInterval(() => {
+    if (state !== "pensando") return;
+    const secs = Math.floor((Date.now() - stateSince) / 1000);
+    if (secs >= 3) $("hint").textContent = `${baseHint} ${secs} s`;
+  }, 1000);
+
   // ── events from Jarvis ─────────────────────────────────
   function connect() {
     const es = new EventSource("/events");
@@ -435,12 +443,14 @@ button:focus-visible { outline: 2px solid var(--cyan-hot); outline-offset: 3px; 
           state = ev.state; document.body.dataset.state = ev.state;
           $("state").textContent = STATE_LABEL[ev.state] || ev.state.toUpperCase();
           $("hint").textContent = ev.label || "";
+          baseHint = ev.label || ""; stateSince = Date.now();
           if (ev.state === "reposo" || ev.state === "escuchando") { /* keep caption */ }
           if (ev.state !== "arrancando") document.body.classList.replace("boot", "ready");
           break;
         case "wake": burst = 1; chime(); break;
         case "level": if (ev.source === "voz") voice = Math.max(voice, ev.value); else mic = Math.max(mic, ev.value); break;
         case "message": logLine(ev.role, ev.text); caption(ev.text, ev.role); break;
+        case "partial": caption(ev.text, ev.role); break;
         case "snapshot": renderSnapshot(ev); break;
         case "status": renderStatus(ev); break;
         case "notice": toast(ev.text); break;

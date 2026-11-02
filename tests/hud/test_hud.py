@@ -298,3 +298,80 @@ def test_engine_choice(monkeypatch) -> None:
         brain_mod.JarvisBrain(HudConfig(motor_cerebro="vllm"))._engine_for(None)
         == "vllm"
     )
+
+
+def test_sentence_splitter_streams_and_drops_thinking() -> None:
+    from openjarvis.hud.brain import SentenceSplitter
+
+    sp = SentenceSplitter()
+    out: list = []
+    for tok in [
+        "<think>",
+        "plan</think>",
+        "Buenas ",
+        "tardes, señor. Hoy ",
+        "tiene **tres** reu",
+        "niones. ¿Algo",
+        " más?",
+    ]:
+        out += sp.feed(tok)
+    out += sp.flush()
+    assert out == ["Buenas tardes, señor.", "Hoy tiene tres reuniones.", "¿Algo más?"]
+
+
+class _FakeSDK:
+    class config:  # noqa: N801
+        class intelligence:  # noqa: N801
+            default_model = "fake"
+
+    def _ensure_engine(self) -> None:
+        pass
+
+    def chat_stream(self, messages, **kw):  # type: ignore[no-untyped-def]
+        self.last_messages = messages
+        yield from ["Hola, ", "señor. ", "Todo en ", "orden."]
+
+
+def test_assistant_speaks_while_streaming() -> None:
+    from openjarvis.hud.assistant import JarvisAssistant
+    from openjarvis.hud.config import HudConfig
+
+    a = JarvisAssistant(
+        HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
+    )
+    a.brain._sdk = _FakeSDK()  # noqa: SLF001
+    a.brain._model = "fake"  # noqa: SLF001
+    events: list = []
+    a.hub.publish = lambda kind, **d: events.append((kind, d))  # type: ignore[method-assign]
+    played: list = []
+    a.speaker.synthesize = lambda text: text.encode()  # type: ignore[method-assign]
+    a.speaker.play = lambda audio, on_level=None: played.append(audio.decode())  # type: ignore[method-assign]
+
+    assert a._say_stream(a.brain.stream_reply("hola"), fallback=lambda: "x")  # noqa: SLF001
+    assert played == ["Hola, señor.", "Todo en orden."]
+    partials = [d["text"] for k, d in events if k == "partial"]
+    assert partials == ["Hola, señor.", "Hola, señor. Todo en orden."]
+    assert a.brain._history[-1] == ("assistant", "Hola, señor. Todo en orden.")  # noqa: SLF001
+    a.server._httpd.server_close()  # noqa: SLF001 - never started
+
+
+def test_assistant_falls_back_when_engine_fails() -> None:
+    from openjarvis.hud.assistant import JarvisAssistant
+    from openjarvis.hud.config import HudConfig
+
+    a = JarvisAssistant(
+        HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
+    )
+
+    def broken():  # type: ignore[no-untyped-def]
+        raise RuntimeError("No inference engine available")
+        yield  # pragma: no cover
+
+    said: list = []
+    a._say = lambda text: said.append(text)  # type: ignore[method-assign]  # noqa: SLF001
+    notices: list = []
+    a.hub.publish = lambda kind, **d: notices.append(d) if kind == "notice" else None  # type: ignore[method-assign]
+    assert not a._say_stream(broken(), fallback=lambda: "modo de emergencia")  # noqa: SLF001
+    assert said == ["modo de emergencia"]
+    assert notices and "Ollama" in notices[0]["text"]
+    a.server._httpd.server_close()  # noqa: SLF001 - never started

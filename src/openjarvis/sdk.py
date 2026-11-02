@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -373,6 +373,61 @@ class Jarvis:
         )
         return result.get("content", "") or ""
 
+    def chat_stream(
+        self,
+        messages: List[Message],
+        *,
+        model: str,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Iterator[str]:
+        """Synchronous token stream over an explicit message list.
+
+        Runs the engine's async ``stream()`` on a background event loop owned
+        by this instance, so callers in plain threads (the voice HUD) can start
+        speaking the first sentence while the rest is still being generated.
+        """
+        import queue as _queue
+
+        from openjarvis.engine._async_loop import AsyncLoopRunner
+
+        self._ensure_engine()
+        if temperature is None:
+            temperature = self._config.intelligence.temperature
+        if max_tokens is None:
+            max_tokens = self._config.intelligence.max_tokens
+        if getattr(self, "_stream_loop", None) is None:
+            self._stream_loop = AsyncLoopRunner(name="openjarvis-chat-stream")
+
+        q: "_queue.Queue[tuple[str, Any]]" = _queue.Queue()
+        engine = self._engine
+
+        async def _pump() -> None:
+            try:
+                async for token in engine.stream(
+                    list(messages),
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ):
+                    q.put(("token", token))
+            except BaseException as exc:  # noqa: BLE001 - re-raised in caller
+                q.put(("error", exc))
+            finally:
+                q.put(("end", None))
+
+        import asyncio as _asyncio
+
+        _asyncio.run_coroutine_threadsafe(_pump(), self._stream_loop._loop)  # noqa: SLF001
+        while True:
+            kind, value = q.get()
+            if kind == "token":
+                yield value
+            elif kind == "error":
+                raise value
+            else:
+                return
+
     async def ask_stream(
         self,
         query: str,
@@ -679,6 +734,10 @@ class Jarvis:
     def close(self) -> None:
         """Release all resources."""
         self.memory.close()
+        stream_loop = getattr(self, "_stream_loop", None)
+        if stream_loop is not None:
+            stream_loop.shutdown()
+            self._stream_loop = None
         if self._energy_monitor is not None:
             try:
                 self._energy_monitor.close()

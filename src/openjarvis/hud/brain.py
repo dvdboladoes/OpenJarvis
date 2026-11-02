@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Iterator, List, Optional
 
 from openjarvis.hud.config import HudConfig
 
@@ -65,7 +65,7 @@ una alternativa.
 BRIEFING_INSTRUCTION = """\
 {tratamiento_cap} acaba de activarte ({como}). Saluda según la hora \
 ("buenos días", "buenas tardes" o "buenas noches") y dale un briefing hablado \
-de unos 30 a 45 segundos con lo importante de los DATOS DEL DÍA, en este orden \
+de unos 20 a 30 segundos con lo importante de los DATOS DEL DÍA, en este orden \
 si existe: tiempo, agenda de hoy, correos o tareas que requieren atención y \
 métricas clave (destaca lo que sube o baja). Si no hay datos de algo, sáltalo \
 sin mencionarlo. Termina preguntando en qué puedes ayudarle.\
@@ -151,6 +151,72 @@ def is_sleep_command(text: str) -> bool:
     return any(p in t for p in SLEEP_PHRASES)
 
 
+class SentenceSplitter:
+    """Turn a token stream into speakable sentences.
+
+    Drops ``<think>…</think>`` blocks, cleans markdown, and emits a sentence as
+    soon as it ends in . ! ? … : or a line break — so speech can start long
+    before the model has finished writing.
+    """
+
+    _END = re.compile(r"(.+?[.!?…:;](?:[\"»')\]]*))(\s+|$)|(.+?)\n+", re.S)
+
+    def __init__(self, min_chars: int = 18) -> None:
+        self.min_chars = min_chars
+        self._buf = ""
+        self._in_think = False
+
+    def _strip_think(self, text: str) -> str:
+        out = []
+        i = 0
+        while i < len(text):
+            if self._in_think:
+                j = text.find("</think>", i)
+                if j < 0:
+                    return "".join(out)
+                self._in_think = False
+                i = j + len("</think>")
+            else:
+                j = text.find("<think>", i)
+                if j < 0:
+                    out.append(text[i:])
+                    break
+                out.append(text[i:j])
+                self._in_think = True
+                i = j + len("<think>")
+        return "".join(out)
+
+    def feed(self, token: str) -> List[str]:
+        self._buf += token
+        if "<think>" in self._buf or self._in_think:
+            head, sep, tail = self._buf.rpartition("<")
+            # keep a possibly half-received tag in the buffer
+            if sep and not tail.startswith(("think>", "/think>")) and len(tail) < 8:
+                ready, self._buf = head, sep + tail
+            else:
+                ready, self._buf = self._buf, ""
+            self._buf = self._strip_think(ready) + self._buf
+        out: List[str] = []
+        while True:
+            m = self._END.match(self._buf)
+            if not m:
+                break
+            sentence = (m.group(1) or m.group(3) or "").strip()
+            # Wait for a longer chunk if this one is tiny and more may follow.
+            if len(sentence) < self.min_chars and m.end() >= len(self._buf):
+                break
+            self._buf = self._buf[m.end() :]
+            cleaned = clean_for_speech(sentence)
+            if cleaned:
+                out.append(cleaned)
+        return out
+
+    def flush(self) -> List[str]:
+        rest = clean_for_speech(self._strip_think(self._buf))
+        self._buf = ""
+        return [rest] if rest else []
+
+
 class JarvisBrain:
     """Wraps the OpenJarvis SDK with the Spanish Jarvis persona and history."""
 
@@ -162,6 +228,7 @@ class JarvisBrain:
         self._history: List[tuple[str, str]] = []
         self._facts = ""
         self._model: Optional[str] = None
+        self.last_reply = ""
 
     # -- lifecycle --------------------------------------------------------
 
@@ -247,7 +314,7 @@ class JarvisBrain:
         datos = self._facts or "(Sin datos todavía.)"
         return f"{base}\n{hoy}\n\nDATOS DEL DÍA:\n{datos}"
 
-    def _complete(self, user_text: str, *, remember: bool = True) -> str:
+    def _messages(self, user_text: str) -> tuple[str, list]:
         from openjarvis.core.types import Message, Role
 
         model = self.resolve_model()
@@ -265,7 +332,15 @@ class JarvisBrain:
                 )
             )
         messages.append(Message(role=Role.USER, content=user_text))
+        return model, messages
 
+    def _remember(self, user_text: Optional[str], reply: str) -> None:
+        if user_text is not None:
+            self._history.append(("user", user_text))
+        self._history.append(("assistant", reply))
+
+    def _complete(self, user_text: str, *, remember: bool = True) -> str:
+        model, messages = self._messages(user_text)
         reply = self._ensure_sdk().chat(
             messages,
             model=model,
@@ -274,24 +349,62 @@ class JarvisBrain:
         )
         reply = clean_for_speech(reply) or "Disculpe, no he podido procesar eso."
         if remember:
-            self._history.append(("user", user_text))
-            self._history.append(("assistant", reply))
+            self._remember(user_text, reply)
         return reply
 
-    def briefing(self, como: str = "") -> str:
+    def stream(
+        self, user_text: str, *, remember: bool = True, max_tokens: int = 0
+    ) -> Iterator[str]:
+        """Yield the reply sentence by sentence as the model writes it."""
+        model, messages = self._messages(user_text)
+        splitter = SentenceSplitter()
+        spoken: List[str] = []
+        tokens = self._ensure_sdk().chat_stream(
+            messages,
+            model=model,
+            max_tokens=max_tokens or self.cfg.max_tokens,
+            temperature=self.cfg.temperatura,
+        )
+        for token in tokens:
+            for sentence in splitter.feed(token):
+                spoken.append(sentence)
+                yield sentence
+        for sentence in splitter.flush():
+            spoken.append(sentence)
+            yield sentence
+        reply = " ".join(spoken) or "Disculpe, no he podido procesar eso."
+        if not spoken:
+            yield reply
+        if remember:
+            self._remember(user_text, reply)
+        self.last_reply = reply
+
+    def _briefing_instruction(self, como: str) -> str:
         how = {"palmadas": "con dos palmadas", "voz": "diciendo Hey Jarvis"}.get(
             como, "desde la interfaz"
         )
-        instruction = BRIEFING_INSTRUCTION.format(
+        return BRIEFING_INSTRUCTION.format(
             tratamiento_cap=self.cfg.honorific.capitalize(), como=how
         )
+
+    def briefing(self, como: str = "") -> str:
         self.reset_conversation()
-        reply = self._complete(instruction, remember=False)
-        self._history.append(("assistant", reply))
+        reply = self._complete(self._briefing_instruction(como), remember=False)
+        self._remember(None, reply)
         return reply
+
+    def stream_briefing(self, como: str = "") -> Iterator[str]:
+        self.reset_conversation()
+        yield from self.stream(
+            self._briefing_instruction(como), remember=False, max_tokens=320
+        )
+        self._remember(None, self.last_reply)
 
     def reply(self, user_text: str) -> str:
         return self._complete(user_text)
+
+    def stream_reply(self, user_text: str) -> Iterator[str]:
+        yield from self.stream(user_text)
 
 
 def offline_briefing(cfg: HudConfig, snapshot: "Snapshot") -> str:
@@ -321,6 +434,7 @@ def offline_briefing(cfg: HudConfig, snapshot: "Snapshot") -> str:
 
 __all__ = [
     "JarvisBrain",
+    "SentenceSplitter",
     "clean_for_speech",
     "fecha_hablada",
     "is_cloud_model",

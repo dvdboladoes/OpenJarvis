@@ -199,14 +199,12 @@ class JarvisAssistant:
             snap = self._get_snapshot()
 
             self._set_state("pensando", "Preparando su briefing…")
-            try:
-                text = self.brain.briefing(source)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Briefing sin IA: %s", exc)
-                self._engine_notice(exc)
-                text = offline_briefing(self.cfg, snap)
-            self._say(text)
-            self._conversation()
+            spoken = self._say_stream(
+                self.brain.stream_briefing(source),
+                fallback=lambda: offline_briefing(self.cfg, snap),
+            )
+            if spoken:
+                self._conversation()
         except Exception:  # noqa: BLE001
             logger.exception("Error en la sesión de Jarvis")
             self._set_state("error", "Algo ha fallado — revisa la consola")
@@ -244,13 +242,77 @@ class JarvisAssistant:
 
     def _answer(self, text: str) -> None:
         self._set_state("pensando", "Procesando…")
-        try:
-            reply = self.brain.reply(text)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Fallo del motor de IA: %s", exc)
-            self._engine_notice(exc)
-            reply = "Lo siento, mi motor de lenguaje no responde en este momento."
-        self._say(reply)
+        self._say_stream(
+            self.brain.stream_reply(text),
+            fallback=lambda: (
+                "Lo siento, mi motor de lenguaje no responde en este momento."
+            ),
+        )
+
+    def _say_stream(self, sentences: Any, fallback: Any) -> bool:
+        """Speak sentences as the model produces them.
+
+        Three stages run in parallel: the model writes sentence N+2 while the
+        voice engine synthesises N+1 and the speakers play N. The first words
+        are heard as soon as the first sentence exists instead of after the
+        whole reply. Returns False if the engine failed before saying anything.
+        """
+        import queue
+
+        text_q: "queue.Queue[Any]" = queue.Queue()
+        audio_q: "queue.Queue[Any]" = queue.Queue(maxsize=3)
+        done = object()
+
+        def produce() -> None:
+            try:
+                for sentence in sentences:
+                    if self._cancel.is_set():
+                        break
+                    text_q.put(sentence)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Fallo del motor de IA: %s", exc)
+                text_q.put(exc)
+            finally:
+                text_q.put(done)
+
+        def synthesize() -> None:
+            while True:
+                item = text_q.get()
+                if item is done or isinstance(item, Exception):
+                    audio_q.put(item)
+                    return
+                audio_q.put((item, self.speaker.synthesize(item)))
+
+        threading.Thread(target=produce, name="jarvis-llm", daemon=True).start()
+        threading.Thread(target=synthesize, name="jarvis-tts", daemon=True).start()
+
+        said: list[str] = []
+        failed = False
+        while True:
+            item = audio_q.get()
+            if item is done:
+                break
+            if isinstance(item, Exception):
+                self._engine_notice(item)
+                failed = True
+                break
+            sentence, audio = item
+            said.append(sentence)
+            if self._state != "hablando":
+                self._set_state("hablando", "")
+            self.hub.publish("partial", role="jarvis", text=" ".join(said))
+            if audio and not self._cancel.is_set():
+                try:
+                    self.speaker.play(audio, self._voice_level)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("No se pudo reproducir el audio: %s", exc)
+
+        if said:
+            self.hub.publish("message", role="jarvis", text=" ".join(said))
+            return True
+        if failed:
+            self._say(fallback())
+        return not failed
 
     def _say(self, text: str) -> None:
         self.hub.publish("message", role="jarvis", text=text)
