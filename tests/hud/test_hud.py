@@ -244,3 +244,13 @@ def test_old_config_gets_new_sections(tmp_path) -> None:
     assert "[oido]" in text and "[cerebro]" in text
     assert text.count("[usuario]") == 1
     assert load_hud_config(path).modelo_oido == "auto"
+
+
+def test_pick_installed_model() -> None:
+    from openjarvis.hud.brain import pick_installed_model
+
+    installed = ["nomic-embed-text:latest", "qwen3:8b"]
+    assert pick_installed_model("qwen3.5:2b", installed) == "qwen3:8b"
+    assert pick_installed_model("qwen3:8b", installed) == "qwen3:8b"
+    assert pick_installed_model("llama3", ["llama3:latest"]) == "llama3:latest"
+    assert pick_installed_model("qwen3:8b", []) == ""

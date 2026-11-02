@@ -94,6 +94,23 @@ def is_cloud_model(model: Optional[str]) -> bool:
     return bool(m) and m.startswith(_CLOUD_PREFIXES)
 
 
+def pick_installed_model(wanted: str, available: List[str]) -> str:
+    """Return *wanted* if installed (ignoring a ``:latest`` tag), else the best
+    installed chat model, else ``""``."""
+    if not available:
+        return ""
+
+    def norm(name: str) -> str:
+        return name[:-7] if name.endswith(":latest") else name
+
+    names = {norm(m): m for m in available}
+    if wanted and norm(wanted) in names:
+        return names[norm(wanted)]
+    # Skip embedding-only models, which cannot chat.
+    chat = [m for m in available if "embed" not in m.lower()]
+    return (chat or available)[0]
+
+
 def fecha_hablada(now: Optional[datetime] = None) -> str:
     now = now or datetime.now()
     return f"{_DIAS[now.weekday()]} {now.day} de {_MESES[now.month - 1]}"
@@ -126,6 +143,7 @@ class JarvisBrain:
         self._sdk = None
         self._history: List[tuple[str, str]] = []
         self._facts = ""
+        self._model: Optional[str] = None
 
     # -- lifecycle --------------------------------------------------------
 
@@ -138,6 +156,38 @@ class JarvisBrain:
                 model=model, engine_key="cloud" if is_cloud_model(model) else None
             )
         return self._sdk
+
+    def resolve_model(self) -> str:
+        """Pick a model that the engine can actually serve.
+
+        ``jarvis init`` stores the starter model the installer *tried* to pull
+        as the default; if that download failed, asking Ollama for it fails
+        with "model not found" even though other models are installed. Prefer
+        the configured model when it exists, otherwise the first installed one.
+        """
+        if self._model:
+            return self._model
+        sdk = self._ensure_sdk()
+        sdk._ensure_engine()  # noqa: SLF001
+        wanted = self.cfg.modelo or sdk.config.intelligence.default_model or ""
+        if is_cloud_model(wanted):
+            self._model = wanted
+            return wanted
+        try:
+            available = list(sdk._engine.list_models())  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            available = []
+        self._model = pick_installed_model(wanted, available)
+        if not self._model:
+            raise RuntimeError(
+                "No inference engine model: Ollama no tiene ningún modelo "
+                "descargado (ollama pull qwen3:8b)"
+            )
+        if wanted and self._model != wanted:
+            logger.warning(
+                "El modelo %r no está instalado; uso %r", wanted, self._model
+            )
+        return self._model
 
     def close(self) -> None:
         if self._sdk is not None:
@@ -165,7 +215,13 @@ class JarvisBrain:
     def _complete(self, user_text: str, *, remember: bool = True) -> str:
         from openjarvis.core.types import Message, Role
 
-        messages = [Message(role=Role.SYSTEM, content=self.system_prompt())]
+        model = self.resolve_model()
+        system = self.system_prompt()
+        if "qwen3" in model.lower():
+            # Qwen3's soft switch: skip the long hidden reasoning, which would
+            # otherwise eat the token budget and add seconds of silence.
+            system += "\n/no_think"
+        messages = [Message(role=Role.SYSTEM, content=system)]
         for role, content in self._history[-self.MAX_HISTORY :]:
             messages.append(
                 Message(
@@ -177,6 +233,7 @@ class JarvisBrain:
 
         reply = self._ensure_sdk().chat(
             messages,
+            model=model,
             max_tokens=self.cfg.max_tokens,
             temperature=self.cfg.temperatura,
         )
@@ -232,6 +289,7 @@ __all__ = [
     "clean_for_speech",
     "fecha_hablada",
     "is_cloud_model",
+    "pick_installed_model",
     "is_sleep_command",
     "offline_briefing",
 ]

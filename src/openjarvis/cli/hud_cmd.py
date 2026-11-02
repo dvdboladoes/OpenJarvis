@@ -61,7 +61,14 @@ def _redirect_headless_output() -> None:
     is_flag=True,
     help="Quitar el arranque automático.",
 )
+@click.option(
+    "--diagnostico",
+    "diagnose",
+    is_flag=True,
+    help="Probar cerebro, voz, micrófono y oído, y decir qué falla.",
+)
 def hud(
+    diagnose: bool,
     demo: bool,
     no_mic: bool,
     no_window: bool,
@@ -83,6 +90,12 @@ def hud(
         path = ensure_config_file()
         console.print(f"Configuración: [cyan]{path}[/cyan]")
         click.launch(str(path))
+        return
+
+    if diagnose:
+        from openjarvis.hud.diagnostics import run_diagnostics
+
+        run_diagnostics(load_hud_config(), console, mic=not no_mic)
         return
 
     if autostart or no_autostart:
