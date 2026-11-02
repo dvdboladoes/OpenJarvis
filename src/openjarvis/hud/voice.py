@@ -235,9 +235,9 @@ class EndpointDetector:
     def __init__(
         self,
         *,
-        end_silence: float = 0.8,
+        end_silence: float = 1.0,
         startup_timeout: float = 6.0,
-        max_utterance: float = 12.0,
+        max_utterance: float = 15.0,
         calib_blocks: int = 10,
     ) -> None:
         self.end_silence = end_silence
@@ -261,9 +261,21 @@ class EndpointDetector:
         self._n += 1
         if self._n <= self.calib_blocks:
             self._calib.append(rms)
-            if self._n == self.calib_blocks:
-                self._calib.sort()
-                self.ambient = self._calib[len(self._calib) // 2]
+            if self._n < self.calib_blocks:
+                return "wait"
+            # People start talking the moment they press the mic button, so
+            # the calibration window often contains speech. The *quietest*
+            # block (gaps between syllables) is a far better noise estimate
+            # than the median, and is capped so speech can never become the
+            # "noise floor".
+            self.ambient = min(min(self._calib) * 1.3, 0.02)
+            loud = [r for r in self._calib if r > self.start_threshold]
+            if len(loud) >= 2:
+                # Speech already began during calibration: keep it.
+                self.speech = True
+                self._peak = max(self._calib)
+                self._speech_blocks = len(self._calib)
+                return "speech"
             return "wait"
 
         if not self.speech:
@@ -298,9 +310,9 @@ class AdaptiveRecorder:
         self,
         *,
         sample_rate: int = 16000,
-        end_silence: float = 0.8,
+        end_silence: float = 1.0,
         startup_timeout: float = 6.0,
-        max_utterance: float = 12.0,
+        max_utterance: float = 15.0,
         on_level: Optional[LevelFn] = None,
     ) -> None:
         self.sample_rate = sample_rate

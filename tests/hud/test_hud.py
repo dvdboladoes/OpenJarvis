@@ -282,7 +282,7 @@ def test_endpoint_times_out_on_silence() -> None:
 
 def test_endpoint_caps_never_ending_speech() -> None:
     verdict, t = _endpoint([0.01] * 10 + [0.3] * 1000)
-    assert verdict == "end" and t <= 12.5
+    assert verdict == "end" and t <= 15.5
 
 
 def test_engine_choice(monkeypatch) -> None:
@@ -586,3 +586,11 @@ def test_cpu_only_option() -> None:
     b2 = JarvisBrain(HudConfig(), memory_path="/nonexistent/m.json")
     b2._model = "qwen3:1.7b"  # noqa: SLF001
     assert "num_gpu" not in b2._engine_options()  # noqa: SLF001
+
+
+def test_endpoint_keeps_speech_that_starts_immediately() -> None:
+    # The user talks straight away: calibration blocks are already speech.
+    rms = [0.15, 0.2, 0.05, 0.18, 0.22, 0.01, 0.2, 0.19, 0.17, 0.2] + [0.2] * 40
+    rms += [0.01] * 60
+    verdict, t = _endpoint(rms)
+    assert verdict == "end" and t is not None and t > 1.5
