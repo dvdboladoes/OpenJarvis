@@ -342,6 +342,7 @@ class Jarvis:
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        **engine_kwargs: Any,
     ) -> str:
         """Run a multi-turn completion over an explicit message list.
 
@@ -370,6 +371,7 @@ class Jarvis:
             model=model_name,
             temperature=temperature,
             max_tokens=max_tokens,
+            **engine_kwargs,
         )
         return result.get("content", "") or ""
 
@@ -380,6 +382,7 @@ class Jarvis:
         model: str,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        **engine_kwargs: Any,
     ) -> Iterator[str]:
         """Synchronous token stream over an explicit message list.
 
@@ -409,6 +412,7 @@ class Jarvis:
                     model=model,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    **engine_kwargs,
                 ):
                     q.put(("token", token))
             except BaseException as exc:  # noqa: BLE001 - re-raised in caller

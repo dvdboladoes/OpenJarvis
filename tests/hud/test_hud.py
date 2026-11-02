@@ -220,6 +220,7 @@ def test_whisper_model_choice() -> None:
         "float16",
     )
     assert choose_whisper_model("auto", cuda=False) == ("medium", "cpu", "int8")
+    assert choose_whisper_model("auto", cuda=False, ram_gb=8)[0] == "small"
     assert choose_whisper_model("small", cuda=False)[0] == "small"
 
 
@@ -450,3 +451,27 @@ def test_save_config_value(tmp_path) -> None:
     cfg = load_hud_config(p)
     assert cfg.voz == "en-US-AndrewMultilingualNeural"
     assert cfg.motor_oido == "local"  # other sections untouched
+
+
+def test_lite_mode_for_local_models() -> None:
+    from openjarvis.hud.brain import JarvisBrain
+    from openjarvis.hud.config import HudConfig
+
+    local = JarvisBrain(HudConfig(), memory_path="/nonexistent/mem.json")
+    local._model = "qwen3:8b"  # noqa: SLF001
+    assert local.lite
+    assert local._engine_options() == {"num_ctx": 3072}  # noqa: SLF001
+    assert local._token_budget(500) == 220  # noqa: SLF001
+    assert len(local.system_prompt()) < 2500
+
+    cloud = JarvisBrain(
+        HudConfig(modelo="claude-sonnet-5-5"), memory_path="/nonexistent/m.json"
+    )
+    cloud._model = "claude-sonnet-5-5"  # noqa: SLF001
+    assert not cloud.lite and cloud._engine_options() == {}  # noqa: SLF001
+
+    full = JarvisBrain(
+        HudConfig(modo_cerebro="completo"), memory_path="/nonexistent/m.json"
+    )
+    full._model = "qwen3:8b"  # noqa: SLF001
+    assert not full.lite and full._engine_options() == {"num_ctx": 8192}  # noqa: SLF001

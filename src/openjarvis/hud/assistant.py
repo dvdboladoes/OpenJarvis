@@ -180,6 +180,10 @@ class JarvisAssistant:
             pass
         try:
             model = self.brain.resolve_model()
+            self._set_state("arrancando", "Cargando el cerebro en memoria…")
+            t0 = time.monotonic()
+            self.brain.warm_up()
+            logger.info("Modelo %s listo en %.1f s", model, time.monotonic() - t0)
             sdk = self.brain._ensure_sdk()  # noqa: SLF001
             engine = getattr(sdk, "_resolved_engine_key", "") or "ok"
             status["motor"] = f"{model} · {engine}"

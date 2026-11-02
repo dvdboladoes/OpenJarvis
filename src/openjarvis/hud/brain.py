@@ -74,6 +74,19 @@ DATOS DEL DÍA; si algo no está, dilo con naturalidad y nunca lo inventes.
 - Para todo lo demás, usa tu conocimiento general con libertad.
 """
 
+# Short persona for local models on a CPU: every token of the system prompt
+# must be read on each turn, so this one is ~5x smaller than PERSONA.
+PERSONA_LITE = """\
+Eres JARVIS, la IA personal de {quien}: cálido, ingenioso y natural, como un \
+amigo muy listo. Hablas español de España como en una charla real. Imita el \
+ánimo de {tratamiento}: si bromea, bromea; si va en serio, sé serio y \
+razona. Llámale "{tratamiento}" de vez en cuando. Respuestas cortas (una a \
+tres frases) salvo que pida detalle. Empieza con una etiqueta de tono: \
+[alegre], [entusiasta], [bromista], [sereno], [serio], [empatico] o \
+[sorprendido]. Sin markdown ni emojis: se lee en voz alta. Para agenda, \
+correo, tiempo, métricas y notas usa solo DATOS; nunca inventes.
+"""
+
 BRIEFING_INSTRUCTION = """\
 {tratamiento_cap} acaba de activarte ({como}). Salúdale con energía y \
 naturalidad según la hora (buenos días, buenas tardes o buenas noches), como \
@@ -426,9 +439,51 @@ class JarvisBrain:
 
     # -- prompting --------------------------------------------------------
 
+    # -- speed profile ----------------------------------------------------
+
+    @property
+    def lite(self) -> bool:
+        """Compact prompts for local models (CPU inference is the bottleneck)."""
+        mode = (self.cfg.modo_cerebro or "auto").lower()
+        if mode in ("completo", "full"):
+            return False
+        if mode in ("ligero", "lite"):
+            return True
+        return not is_cloud_model(self._model or self.cfg.modelo)
+
+    def _engine_options(self) -> dict:
+        """Ollama options: a small context window keeps a CPU laptop out of swap.
+
+        OpenJarvis asks Ollama for a 16k-token context by default; on an 8 GB
+        machine the extra KV cache alone pushes the model into virtual memory
+        and a reply can take minutes.
+        """
+        if is_cloud_model(self._model or self.cfg.modelo):
+            return {}
+        return {"num_ctx": int(self.cfg.contexto or (3072 if self.lite else 8192))}
+
+    def _token_budget(self, requested: int = 0) -> int:
+        budget = requested or self.cfg.max_tokens
+        return min(budget, 220) if self.lite else budget
+
+    def warm_up(self) -> None:
+        """Load the model into memory now, so the first real answer is fast."""
+        from openjarvis.core.types import Message, Role
+
+        model = self.resolve_model()
+        if is_cloud_model(model):
+            return
+        self._ensure_sdk().chat(
+            [Message(role=Role.USER, content="hola")],
+            model=model,
+            max_tokens=1,
+            **self._engine_options(),
+        )
+
     def system_prompt(self) -> str:
         quien = self.cfg.nombre or "tu usuario"
-        base = PERSONA.format(quien=quien, tratamiento=self.cfg.honorific)
+        persona = PERSONA_LITE if self.lite else PERSONA
+        base = persona.format(quien=quien, tratamiento=self.cfg.honorific)
         hoy = f"Hoy es {fecha_hablada()} y son las {datetime.now():%H:%M}."
         datos = self._facts or "(Sin datos todavía.)"
         if self._notes:
@@ -445,7 +500,8 @@ class JarvisBrain:
             # otherwise eat the token budget and add seconds of silence.
             system += "\n/no_think"
         messages = [Message(role=Role.SYSTEM, content=system)]
-        for role, content in self._history[-self.MAX_HISTORY :]:
+        keep = 6 if self.lite else self.MAX_HISTORY
+        for role, content in self._history[-keep:]:
             messages.append(
                 Message(
                     role=Role.USER if role == "user" else Role.ASSISTANT,
@@ -467,8 +523,9 @@ class JarvisBrain:
         reply = self._ensure_sdk().chat(
             messages,
             model=model,
-            max_tokens=self.cfg.max_tokens,
+            max_tokens=self._token_budget(),
             temperature=self.cfg.temperatura,
+            **self._engine_options(),
         )
         splitter = SentenceSplitter()
         reply = " ".join(splitter.feed(reply) + splitter.flush())
@@ -488,8 +545,9 @@ class JarvisBrain:
         tokens = self._ensure_sdk().chat_stream(
             messages,
             model=model,
-            max_tokens=max_tokens or self.cfg.max_tokens,
+            max_tokens=self._token_budget(max_tokens),
             temperature=self.cfg.temperatura,
+            **self._engine_options(),
         )
         for token in tokens:
             for sentence in splitter.feed(token):
@@ -521,7 +579,9 @@ class JarvisBrain:
 
     def stream_briefing(self, como: str = "") -> Iterator[str]:
         yield from self.stream(
-            self._briefing_instruction(como), remember=False, max_tokens=360
+            self._briefing_instruction(como),
+            remember=False,
+            max_tokens=180 if self.lite else 360,
         )
         self._remember(None, self.last_reply)
 

@@ -191,17 +191,32 @@ def _cuda_available() -> bool:
         return False
 
 
-def choose_whisper_model(requested: str, cuda: bool) -> tuple[str, str, str]:
+def _ram_gb() -> float:
+    try:
+        import psutil
+
+        return psutil.virtual_memory().total / 1024**3
+    except Exception:  # noqa: BLE001
+        return 16.0
+
+
+def choose_whisper_model(
+    requested: str, cuda: bool, ram_gb: float = 16.0
+) -> tuple[str, str, str]:
     """Return ``(model, device, compute_type)`` for faster-whisper.
 
     ``auto`` picks the most accurate model the hardware can run in real time:
-    large-v3-turbo on an NVIDIA GPU, medium (int8) on CPU.
+    large-v3-turbo on an NVIDIA GPU, medium (int8) on a CPU with plenty of RAM,
+    small on machines with less than 12 GB — where the language model needs
+    the memory more.
     """
     req = (requested or "auto").strip()
     device = "cuda" if cuda else "cpu"
     compute = "float16" if cuda else "int8"
     if req == "auto":
-        return ("large-v3-turbo" if cuda else "medium"), device, compute
+        if cuda:
+            return "large-v3-turbo", device, compute
+        return ("medium" if ram_gb >= 12 else "small"), device, compute
     return req, device, compute
 
 
@@ -361,13 +376,15 @@ class Ear:
             logger.warning("faster-whisper no instalado (uv sync --extra desktop)")
             return False
         name, device, compute = choose_whisper_model(
-            self.cfg.modelo_oido, _cuda_available()
+            self.cfg.modelo_oido, _cuda_available(), _ram_gb()
         )
         try:
             self._model = WhisperModel(name, device=device, compute_type=compute)
         except Exception as exc:  # noqa: BLE001 - e.g. CUDA libs missing
             logger.warning("Whisper %s en %s falló (%s); uso CPU", name, device, exc)
-            name, device, compute = choose_whisper_model(self.cfg.modelo_oido, False)
+            name, device, compute = choose_whisper_model(
+                self.cfg.modelo_oido, False, _ram_gb()
+            )
             self._model = WhisperModel(name, device=device, compute_type=compute)
         self.description = f"Whisper {name} ({'GPU' if device == 'cuda' else 'CPU'})"
         self._beam = 5 if device == "cuda" else 2  # CPU: faster, near-equal accuracy
