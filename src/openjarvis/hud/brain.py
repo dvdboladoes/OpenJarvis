@@ -474,6 +474,9 @@ class JarvisBrain:
             "min_p": 0.0,
             "repeat_penalty": 1.15,
             "presence_penalty": 1.0,
+            # Keep the model loaded between questions: reloading it from disk
+            # on a laptop CPU adds many seconds to the first reply after a pause.
+            "keep_alive": "2h",
             # usar_gpu = false → run on the CPU only (num_gpu 0): some
             # integrated GPUs make Ollama emit garbage.
             **({} if self.cfg.usar_gpu else {"num_gpu": 0}),

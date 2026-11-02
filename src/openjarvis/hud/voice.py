@@ -191,6 +191,16 @@ def _cuda_available() -> bool:
         return False
 
 
+def _cpu_threads() -> int:
+    """Physical cores: hyper-threads slow Whisper down on laptops."""
+    try:
+        import psutil
+
+        return max(1, psutil.cpu_count(logical=False) or 4)
+    except Exception:  # noqa: BLE001
+        return 4
+
+
 def _ram_gb() -> float:
     try:
         import psutil
@@ -393,7 +403,9 @@ class Ear:
             self.cfg.modelo_oido, _cuda_available(), _ram_gb()
         )
         try:
-            self._model = WhisperModel(name, device=device, compute_type=compute)
+            self._model = WhisperModel(
+                name, device=device, compute_type=compute, cpu_threads=_cpu_threads()
+            )
         except Exception as exc:  # noqa: BLE001 - e.g. CUDA libs missing
             logger.warning("Whisper %s en %s falló (%s); uso CPU", name, device, exc)
             name, device, compute = choose_whisper_model(
@@ -401,7 +413,7 @@ class Ear:
             )
             self._model = WhisperModel(name, device=device, compute_type=compute)
         self.description = f"Whisper {name} ({'GPU' if device == 'cuda' else 'CPU'})"
-        self._beam = 5 if device == "cuda" else 2  # CPU: faster, near-equal accuracy
+        self._beam = 5 if device == "cuda" else 1  # CPU: greedy decoding is fastest
         return True
 
     @property
@@ -452,6 +464,7 @@ class Ear:
             vad_filter=True,
             condition_on_previous_text=False,
             initial_prompt=WHISPER_PROMPT,
+            without_timestamps=True,
         )
         text = " ".join(seg.text.strip() for seg in segments).strip()
         # Whisper sometimes hallucinates the prompt or stock phrases on silence.

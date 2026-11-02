@@ -181,6 +181,9 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
             payload["think"] = False
         elif kwargs["think"] is not None:
             payload["think"] = kwargs["think"]
+        if kwargs.get("keep_alive") is not None:
+            # How long Ollama keeps the model in memory after this request.
+            payload["keep_alive"] = kwargs["keep_alive"]
         # Pass tools if provided
         tools = kwargs.get("tools")
         if tools:
@@ -304,6 +307,9 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
             payload["think"] = False
         elif kwargs["think"] is not None:
             payload["think"] = kwargs["think"]
+        if kwargs.get("keep_alive") is not None:
+            # How long Ollama keeps the model in memory after this request.
+            payload["keep_alive"] = kwargs["keep_alive"]
         try:
             # ASYNC streaming: ``httpx.AsyncClient`` + ``aiter_lines`` never
             # blocks the event loop between tokens (the previous SYNC
@@ -399,6 +405,9 @@ class OllamaEngine(AsyncHTTPEngineMixin, InferenceEngine):
             payload["think"] = False
         elif kwargs["think"] is not None:
             payload["think"] = kwargs["think"]
+        if kwargs.get("keep_alive") is not None:
+            # How long Ollama keeps the model in memory after this request.
+            payload["keep_alive"] = kwargs["keep_alive"]
 
         tools = kwargs.get("tools")
         if tools:
