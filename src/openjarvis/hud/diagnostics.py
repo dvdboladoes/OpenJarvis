@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 import traceback
+from pathlib import Path
 from typing import Any
 
 from openjarvis.hud.config import HudConfig
@@ -21,9 +21,9 @@ def run_diagnostics(cfg: HudConfig, console: Any, *, mic: bool = True) -> None:
 
     # 1. Brain -------------------------------------------------------------
     console.print("[bold]1. Cerebro (modelo de IA)[/bold]")
-    from openjarvis.hud.brain import JarvisBrain, is_cloud_model
-
     import tempfile
+
+    from openjarvis.hud.brain import JarvisBrain, is_cloud_model
 
     # Use a throwaway memory so the test question never pollutes the real
     # conversation history.
