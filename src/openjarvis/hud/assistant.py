@@ -171,6 +171,16 @@ class JarvisAssistant:
             self.listener = BrowserListener(self.hub.publish)
             self.listener.start()
             return
+        if self.cfg.escucha_continua and self.cfg.motor_oido == "local":
+            from openjarvis.hud.voice import _cuda_available
+
+            if not _cuda_available():
+                logger.warning("Whisper local sin gráfica NVIDIA: oído lento")
+                self.hub.publish(
+                    "notice",
+                    text="Oído lento: estás usando Whisper sin gráfica. Pon "
+                    'motor = "navegador" en [oido] para respuestas instantáneas.',
+                )
         if self.cfg.escucha_continua:
             from openjarvis.hud.listening import ContinuousListener
 
