@@ -161,6 +161,48 @@ def is_cloud_model(model: Optional[str]) -> bool:
     return bool(m) and m.startswith(_CLOUD_PREFIXES)
 
 
+_CLOUD_KEYS = (
+    ("claude", "ANTHROPIC_API_KEY", "anthropic"),
+    ("gpt-", "OPENAI_API_KEY", "openai"),
+    ("o1", "OPENAI_API_KEY", "openai"),
+    ("o3", "OPENAI_API_KEY", "openai"),
+    ("o4", "OPENAI_API_KEY", "openai"),
+    ("gemini", "GEMINI_API_KEY", "google.genai"),
+)
+
+
+def cloud_problem(model: Optional[str]) -> Optional[str]:
+    """Plain-Spanish reason why a cloud model cannot be used, or None."""
+    import importlib.util
+    import os
+
+    m = (model or "").lower()
+    for prefix, env, module in _CLOUD_KEYS:
+        if not m.startswith(prefix):
+            continue
+        has_key = bool(os.environ.get(env)) or (
+            env == "GEMINI_API_KEY" and bool(os.environ.get("GOOGLE_API_KEY"))
+        )
+        if not has_key:
+            return (
+                f"Falta la clave: la variable {env} no existe en esta ventana. "
+                f'Guárdala con setx {env} "TU_CLAVE" y abre una ventana nueva '
+                "de PowerShell."
+            )
+        try:
+            found = importlib.util.find_spec(module) is not None
+        except ModuleNotFoundError:
+            found = False
+        if not found:
+            return (
+                f"Falta el conector de la nube ({module.split('.')[0]}). Ejecuta: "
+                "uv sync --extra desktop --extra hud --extra inference-cloud "
+                "--group desktop-native"
+            )
+        return None
+    return None
+
+
 def ollama_has_models(host: str = "") -> bool:
     """True when a local Ollama server answers and has a model installed."""
     import os
@@ -418,6 +460,9 @@ class JarvisBrain:
             from openjarvis.sdk import Jarvis
 
             model = self.cfg.modelo or None
+            problem = cloud_problem(model) if is_cloud_model(model) else None
+            if problem:
+                raise RuntimeError(problem)
             self._sdk = Jarvis(model=model, engine_key=self._engine_for(model))
         return self._sdk
 

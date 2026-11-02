@@ -619,7 +619,9 @@ class JarvisAssistant:
         msg = str(exc)
         low = msg.lower()
         model = self.cfg.modelo
-        if model and is_cloud_model(model):
+        if msg.startswith(("Falta la clave", "Falta el conector")):
+            hint = msg
+        elif model and is_cloud_model(model):
             if "api" in low and "key" in low or "authentication" in low or "401" in low:
                 hint = f"La clave de API para {model} no es válida o no está definida."
             elif "no inference engine" in low or "unavailable" in low:

@@ -883,3 +883,16 @@ def test_assistant_routes_pc_and_vision(monkeypatch) -> None:
     assert not a._try_skill("¿qué opinas de la inflación?")  # noqa: SLF001
     a.timers.stop()
     a.server._httpd.server_close()  # noqa: SLF001
+
+
+def test_cloud_problem_messages(monkeypatch) -> None:
+    from openjarvis.hud.brain import cloud_problem
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert "ANTHROPIC_API_KEY" in cloud_problem("claude-haiku-5-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    import importlib.util as _u
+
+    monkeypatch.setattr(_u, "find_spec", lambda name: None)
+    assert "conector" in cloud_problem("claude-haiku-5-5")
+    assert cloud_problem("qwen3:1.7b") is None
