@@ -125,7 +125,7 @@ def make_handler(
             if origin and origin.split("://", 1)[-1] != host:
                 self._send(403, b"{}", "application/json")
                 return
-            length = min(int(self.headers.get("Content-Length") or 0), 64_000)
+            length = min(int(self.headers.get("Content-Length") or 0), 10_000_000)
             try:
                 payload = json.loads(self.rfile.read(length) or b"{}")
             except json.JSONDecodeError:

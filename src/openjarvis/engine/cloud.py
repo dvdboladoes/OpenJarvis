@@ -565,6 +565,23 @@ class CloudEngine(InferenceEngine):
                         }
                     )
                 chat_msgs.append({"role": "assistant", "content": content_blocks})
+            elif getattr(m, "images", None):
+                # Vision: base64 images become Anthropic image blocks.
+                blocks: List[Dict[str, Any]] = []
+                for img in m.images or []:
+                    media = "image/png" if img.startswith("iVBOR") else "image/jpeg"
+                    blocks.append(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media,
+                                "data": img,
+                            },
+                        }
+                    )
+                blocks.append({"type": "text", "text": m.content or ""})
+                chat_msgs.append({"role": m.role.value, "content": blocks})
             else:
                 chat_msgs.append({"role": m.role.value, "content": m.content})
         return system_text, chat_msgs

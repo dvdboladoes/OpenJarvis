@@ -55,6 +55,9 @@ def open_window(url: str, *, fullscreen: bool = False) -> bool:
             f"--app={url}",
             f"--user-data-dir={profile}",
             "--autoplay-policy=no-user-gesture-required",
+            # Dedicated Jarvis profile: allow its own camera preview without a
+            # permission prompt (the page only runs on 127.0.0.1).
+            "--use-fake-ui-for-media-stream",
             "--no-first-run",
             "--disable-features=Translate",
             "--window-size=1600,900",

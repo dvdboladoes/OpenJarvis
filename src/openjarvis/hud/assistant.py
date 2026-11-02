@@ -17,8 +17,17 @@ from openjarvis.hud.brain import (
 )
 from openjarvis.hud.config import HudConfig, save_config_value
 from openjarvis.hud.context import Snapshot, collect_snapshot
+from openjarvis.hud.pc import execute as run_pc_action
+from openjarvis.hud.pc import parse_command
 from openjarvis.hud.server import EventHub, HudServer
 from openjarvis.hud.skills import NotesStore, TimerManager, parse_note, parse_timer
+from openjarvis.hud.vision import (
+    SUGGESTED_LOCAL,
+    FrameBroker,
+    capture_screen,
+    parse_vision,
+    pick_vision_model,
+)
 from openjarvis.hud.voice import Ear, Speaker
 
 logger = logging.getLogger(__name__)
@@ -61,6 +70,7 @@ class JarvisAssistant:
             on_done=self._timer_done,
         )
         self.brain.set_notes(self.notes.texts())
+        self.frames = FrameBroker(self.hub.publish)
         self.server = HudServer(
             self.hub,
             {
@@ -76,6 +86,7 @@ class JarvisAssistant:
                 "note_delete": self._api_note_delete,
                 "mic": self._api_mic,
                 "forget": self._api_forget,
+                "frame": self._api_frame,
             },
             port=cfg.puerto,
         )
@@ -406,6 +417,92 @@ class JarvisAssistant:
         )
 
     def _try_skill(self, text: str) -> bool:
+        """Instant skills: PC control, vision, timers and notes."""
+        if self.cfg.control_pc:
+            action = parse_command(text)
+            if action is not None:
+                self._do_pc(action)
+                return True
+        vis = parse_vision(text)
+        if vis is not None:
+            self._look(*vis)
+            return True
+        return self._try_quick_skill(text)
+
+    def _do_pc(self, action: Any) -> None:
+        if action.kind == "hud":
+            self.hub.publish("camera", on=True)
+            self._say(Spoken(f"{action.label}.", "alegre"))
+            return
+        try:
+            said = run_pc_action(action)
+            self.hub.publish("pc", accion=action.kind, texto=said)
+            self._say(Spoken(said, "alegre"))
+        except LookupError as exc:
+            self._say(Spoken(f"{exc} ¿Me lo dices con otro nombre?", "sereno"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Acción del PC fallida: %s", exc)
+            self._say(Spoken("No he podido hacerlo, lo siento.", "empatico"))
+
+    def _vision_model(self) -> Optional[str]:
+        if self.cfg.modelo_vision:
+            return self.cfg.modelo_vision
+        main = self.brain.resolve_model()
+        if is_cloud_model(main):
+            return main
+        try:
+            sdk = self.brain._ensure_sdk()  # noqa: SLF001
+            installed = list(sdk._engine.list_models())  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            installed = []
+        return pick_vision_model(main, installed, is_cloud=False)
+
+    def _look(self, source: str, question: str) -> None:
+        """Answer about the camera or the screen."""
+        self._set_state("pensando", "Mirando…")
+        model = self._vision_model()
+        if not model:
+            self._say(
+                Spoken(
+                    "Aún no tengo ojos, señor. Para verte necesito un modelo con "
+                    "visión: instala uno con ollama pull "
+                    f"{SUGGESTED_LOCAL.replace(':', ' dos puntos ')}, o usa Claude "
+                    "como cerebro.",
+                    "sereno",
+                )
+            )
+            self.hub.publish(
+                "notice",
+                text=f"Para la visión: ollama pull {SUGGESTED_LOCAL} "
+                '(o pon modelo = "claude-sonnet-5-5" en [cerebro]).',
+            )
+            return
+        if source == "pantalla":
+            try:
+                image = capture_screen()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Captura de pantalla fallida: %s", exc)
+                image = None
+        else:
+            self.hub.publish("camera", on=True)
+            image = self.frames.request(timeout=8.0)
+        if not image:
+            where = "la cámara" if source == "camara" else "la pantalla"
+            self._say(
+                Spoken(
+                    f"No consigo ver {where}. Revisa que la interfaz esté abierta y "
+                    "que hayas permitido la cámara.",
+                    "empatico",
+                )
+            )
+            return
+        self.hub.publish("seen", fuente=source)
+        self._say_stream(
+            self.brain.see(question, image, model, source),
+            fallback=lambda: "No he podido analizar la imagen.",
+        )
+
+    def _try_quick_skill(self, text: str) -> bool:
         """Timers and notes are handled instantly, without the language model."""
         timer = parse_timer(text)
         if timer:
@@ -674,6 +771,10 @@ class JarvisAssistant:
         if not self._session.locked():
             self._set_state("reposo", self._idle_hint())
         return {"on": self._mic_enabled}
+
+    def _api_frame(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        image = str(payload.get("image", ""))[:8_000_000]
+        return {"ok": self.frames.deliver(str(payload.get("id", "")), image)}
 
     def _api_forget(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
         self.brain.forget()

@@ -49,6 +49,23 @@ Jarvis recuerda la conversación entre sesiones (puedes borrarla desde
 Ajustes) y adapta su tono al tuyo: si le hablas de broma, bromea; si vas en
 serio, se pone serio.
 
+## Control del ordenador y visión
+
+Dile, por ejemplo:
+
+- «Abre YouTube», «abre el calendario», «abre Gmail», «abre Spotify»,
+  «abre la carpeta de descargas», «abre amazon.es»
+- «Pon el último vídeo de Ibai», «pon Bad Bunny en YouTube»
+- «Busca recetas de lentejas», «¿cómo llego a Madrid?»
+- «Sube el volumen», «pausa», «siguiente canción»
+- «¿Qué hago aquí?», «¿qué ves?», «mira esto» → usa la cámara (verás la
+  imagen en directo en la interfaz)
+- «¿Qué hay en mi pantalla?» → mira tu pantalla
+
+Jarvis solo abre webs, programas de tu menú Inicio, carpetas y teclas de
+música: nunca ejecuta comandos. Para ver necesita un modelo con visión:
+Claude, o uno local (`ollama pull qwen2.5vl:3b`).
+
 ## Configuración
 
 El archivo es `C:\Users\<tú>\.openjarvis\jarvis.toml` y se crea solo la

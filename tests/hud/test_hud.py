@@ -755,3 +755,131 @@ def test_continuous_mode_answers_each_utterance() -> None:
     assert said == ["play"] and FakeListener.resumed == 1
     a.timers.stop()
     a.server._httpd.server_close()  # noqa: SLF001
+
+
+# ── PC control & vision ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text,kind,arg",
+    [
+        ("Jarvis, abre YouTube", "url", "https://www.youtube.com"),
+        ("abre el calendario", "url", "https://calendar.google.com"),
+        ("pon el último vídeo de Ibai", "youtube", "ibai último vídeo"),
+        ("pon Bad Bunny en youtube", "youtube", "bad bunny"),
+        ("abre la carpeta de descargas", "folder", "Downloads"),
+        ("sube el volumen", "media", "vol_up"),
+        ("busca recetas de lentejas", "search", "recetas de lentejas"),
+        ("abre amazon.es", "url", "https://amazon.es"),
+        ("abre la cámara", "hud", "camera_on"),
+        ("abre spotify", "app", "spotify"),
+    ],
+)
+def test_pc_commands(text: str, kind: str, arg: str) -> None:
+    from openjarvis.hud.pc import parse_command
+
+    action = parse_command(text)
+    assert action is not None and (action.kind, action.arg) == (kind, arg)
+
+
+def test_pc_ignores_normal_conversation() -> None:
+    from openjarvis.hud.pc import parse_command
+
+    for text in (
+        "¿qué tal estás?",
+        "cuéntame un chiste",
+        "pon un temporizador de 5 minutos",
+    ):
+        assert parse_command(text) is None
+
+
+def test_pc_execute_youtube_opens_first_video(monkeypatch) -> None:
+    from openjarvis.hud import pc
+
+    opened: list = []
+    monkeypatch.setattr(
+        pc, "youtube_first_video", lambda q: "https://www.youtube.com/watch?v=abc"
+    )
+    said = pc.execute(
+        pc.Action("youtube", "ibai", "Pongo ibai en YouTube"), open_url=opened.append
+    )
+    assert opened == ["https://www.youtube.com/watch?v=abc"] and said.startswith(
+        "Pongo"
+    )
+
+
+def test_vision_intents_and_model_choice() -> None:
+    from openjarvis.hud.vision import parse_vision, pick_vision_model
+
+    assert parse_vision("¿Qué hago aquí?")[0] == "camara"
+    assert parse_vision("¿qué hay en mi pantalla?")[0] == "pantalla"
+    assert parse_vision("¿qué tal estás?") is None
+    assert (
+        pick_vision_model("qwen3:1.7b", ["qwen3:1.7b", "qwen2.5vl:3b"], False)
+        == "qwen2.5vl:3b"
+    )
+    assert pick_vision_model("qwen3:1.7b", ["qwen3:1.7b"], False) is None
+    assert pick_vision_model("claude-sonnet-5-5", [], True) == "claude-sonnet-5-5"
+
+
+def test_frame_broker_roundtrip() -> None:
+    import threading as _t
+
+    from openjarvis.hud.vision import FrameBroker
+
+    events: list = []
+    broker = FrameBroker(lambda kind, **d: events.append(d["id"]))
+    result: list = []
+    th = _t.Thread(target=lambda: result.append(broker.request(timeout=3)))
+    th.start()
+    for _ in range(50):
+        if events:
+            break
+        import time as _time
+
+        _time.sleep(0.02)
+    assert broker.deliver(events[0], "data:image/jpeg;base64,QUJD")
+    th.join(3)
+    assert result == ["QUJD"]
+
+
+def test_anthropic_messages_carry_images() -> None:
+    from openjarvis.core.types import Message, Role
+    from openjarvis.engine.cloud import CloudEngine
+
+    engine = CloudEngine.__new__(CloudEngine)
+    _, msgs = engine._prepare_anthropic_messages(  # noqa: SLF001
+        [Message(role=Role.USER, content="¿qué ves?", images=["/9j/AAAA"])]
+    )
+    blocks = msgs[0]["content"]
+    assert blocks[0]["type"] == "image"
+    assert blocks[0]["source"]["media_type"] == "image/jpeg"
+    assert blocks[1] == {"type": "text", "text": "¿qué ves?"}
+
+
+def test_assistant_routes_pc_and_vision(monkeypatch) -> None:
+    from openjarvis.hud import assistant as amod
+    from openjarvis.hud.assistant import JarvisAssistant
+    from openjarvis.hud.config import HudConfig
+
+    a = JarvisAssistant(
+        HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
+    )
+    said: list = []
+    a._say = lambda text: said.append(str(text))  # type: ignore[method-assign]  # noqa: SLF001
+    ran: list = []
+    monkeypatch.setattr(
+        amod, "run_pc_action", lambda act: ran.append(act.arg) or "Abro youtube."
+    )
+    assert a._try_skill("Jarvis, abre YouTube")  # noqa: SLF001
+    assert ran == ["https://www.youtube.com"] and said == ["Abro youtube."]
+
+    # Vision without any vision model → explains how to get one.
+    a._vision_model = lambda: None  # type: ignore[method-assign]  # noqa: SLF001
+    assert a._try_skill("¿qué ves?")  # noqa: SLF001
+    assert "visión" in said[-1]
+
+    # Normal chat goes to the language model.
+    assert not a._try_skill("¿qué opinas de la inflación?")  # noqa: SLF001
+    a.timers.stop()
+    a.server._httpd.server_close()  # noqa: SLF001

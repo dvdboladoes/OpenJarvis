@@ -92,6 +92,17 @@ incluir_tiempo = true
 fuente = ""
 titulo = "Métricas"
 
+[pc]
+# Control del ordenador por voz: "abre YouTube", "pon el último vídeo de…",
+# "abre el calendario", "abre Spotify", "sube el volumen"…
+control = true
+
+[vision]
+# Para "¿qué hago aquí?", "¿qué ves?" (cámara) o "¿qué hay en mi pantalla?".
+# Vacío = automático: Claude si es tu cerebro, o un modelo local con visión
+# instalado en Ollama (por ejemplo: ollama pull qwen2.5vl:3b).
+modelo = ""
+
 [conversacion]
 # Tras el briefing se queda escuchando. Si pasan estas respuestas sin que
 # hables, vuelve a reposo hasta la próxima palmada o "Hey Jarvis".
@@ -144,6 +155,9 @@ class HudConfig:
     metricas_fuente: str = ""
     metricas_titulo: str = "Métricas"
 
+    control_pc: bool = True
+    modelo_vision: str = ""
+
     silencios_para_dormir: int = 2
 
     puerto: int = 8765
@@ -188,6 +202,8 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     briefing = data.get("briefing", {}) or {}
     metricas = data.get("metricas", {}) or {}
     conv = data.get("conversacion", {}) or {}
+    pc = data.get("pc", {}) or {}
+    vision = data.get("vision", {}) or {}
     ui = data.get("interfaz", {}) or {}
 
     d.nombre = str(usuario.get("nombre", d.nombre) or "")
@@ -230,6 +246,9 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
 
     d.metricas_fuente = str(metricas.get("fuente", d.metricas_fuente) or "")
     d.metricas_titulo = str(metricas.get("titulo", d.metricas_titulo) or "Métricas")
+
+    d.control_pc = bool(pc.get("control", d.control_pc))
+    d.modelo_vision = str(vision.get("modelo", d.modelo_vision) or "")
 
     d.silencios_para_dormir = int(
         _clamp(conv.get("silencios_para_dormir", d.silencios_para_dormir), 1, 10, 2)

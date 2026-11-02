@@ -210,6 +210,19 @@ kbd { font: 600 10px var(--display); border: 1px solid rgba(var(--accent-rgb), .
 body.alarm { animation: alarm .5s steps(2) 6; }
 @keyframes alarm { 50% { box-shadow: inset 0 0 120px rgba(255, 77, 106, .7); } }
 
+/* camera */
+.cam { position: fixed; z-index: 6; left: 50%; top: 92px; transform: translateX(-50%) scale(.9); width: 260px; aspect-ratio: 4 / 3;
+  border: 1px solid var(--accent); box-shadow: 0 0 40px rgba(var(--accent-rgb), .35); border-radius: 4px; overflow: hidden; opacity: 0;
+  pointer-events: none; transition: opacity .4s var(--ease), transform .4s var(--ease); background: #000; }
+.cam.on { opacity: 1; transform: translateX(-50%) scale(1); pointer-events: auto; }
+.cam video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.cam .tag { position: absolute; left: 8px; top: 6px; font: 600 10px var(--display); letter-spacing: .16em; color: #fff; display: flex; gap: 6px; align-items: center; text-shadow: 0 1px 4px #000; }
+.cam .tag i { width: 7px; height: 7px; border-radius: 50%; background: #ff3b4f; box-shadow: 0 0 8px #ff3b4f; animation: blink 1.2s infinite; }
+@keyframes blink { 50% { opacity: .2; } }
+.cam .shot { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+.cam .shot.go { animation: flash .5s ease-out; }
+.cam .close { position: absolute; right: 4px; top: 2px; }
+
 /* boot */
 .bootscreen { position: fixed; inset: 0; z-index: 50; background: #000; display: grid; place-items: center; transition: opacity .8s var(--ease); }
 .bootscreen.done { opacity: 0; pointer-events: none; }
@@ -285,6 +298,7 @@ body.alarm { animation: alarm .5s steps(2) 6; }
       <form class="ask" id="askform"><input id="askinput" placeholder="Escribe a Jarvis…   Ctrl+K comandos" aria-label="Escribe a Jarvis" autocomplete="off"></form>
       <button class="ibtn" id="b-hist" title="Conversación (C)" aria-label="Conversación"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg></button>
       <button class="ibtn" id="b-voice" title="Voz y ajustes (V)" aria-label="Voz y ajustes"><svg viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg></button>
+      <button class="ibtn" id="b-cam" title="Cámara" aria-label="Cámara"><svg viewBox="0 0 24 24"><path d="M3 7h4l2-3h6l2 3h4v12H3z"/><circle cx="12" cy="13" r="4"/></svg></button>
       <button class="ibtn" id="b-cine" title="Modo cine (H)" aria-label="Modo cine"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 9h18M3 15h18"/></svg></button>
       <button class="ibtn" id="b-full" title="Pantalla completa (F)" aria-label="Pantalla completa"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
     </div>
@@ -313,6 +327,7 @@ body.alarm { animation: alarm .5s steps(2) 6; }
   <input id="pal-in" placeholder="¿Qué quieres hacer?" autocomplete="off"><ul id="pal-list"></ul>
 </div></div>
 <div class="toast" id="toast" role="status"></div>
+<div class="cam" id="cam" aria-label="Cámara"><video id="camvideo" autoplay playsinline muted></video><div class="tag"><i></i>CÁMARA EN DIRECTO</div><div class="shot" id="camshot"></div><button class="x close" id="camclose" aria-label="Apagar cámara">✕</button></div>
 
 <script src="three.min.js"></script>
 <script>
@@ -607,6 +622,28 @@ body.alarm { animation: alarm .5s steps(2) 6; }
   }
   function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add("show"); clearTimeout(toast.h); toast.h = setTimeout(() => el.classList.remove("show"), 7000); }
 
+  // ── camera (live preview + frames for Jarvis' vision) ─────────
+  let camStream = null;
+  async function camOn() {
+    if (camStream) { $("cam").classList.add("on"); return true; }
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      $("camvideo").srcObject = camStream; $("cam").classList.add("on"); $("b-cam").classList.add("on");
+      await new Promise((r) => setTimeout(r, 700)); return true;
+    } catch (e) { toast("No tengo permiso para usar la cámara. Permítelo en la ventana del navegador."); return false; }
+  }
+  function camOff() { if (camStream) camStream.getTracks().forEach((t) => t.stop()); camStream = null; $("cam").classList.remove("on"); $("b-cam").classList.remove("on"); }
+  async function camFrame(id) {
+    if (!(await camOn())) return;
+    const v = $("camvideo"), c = document.createElement("canvas"), w = Math.min(1024, v.videoWidth || 640);
+    c.width = w; c.height = Math.round(w * (v.videoHeight || 480) / (v.videoWidth || 640));
+    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    $("camshot").classList.remove("go"); void $("camshot").offsetWidth; $("camshot").classList.add("go"); sfx.click();
+    post("frame", { id, image: c.toDataURL("image/jpeg", .82) });
+  }
+  $("b-cam").addEventListener("click", () => (camStream ? camOff() : camOn()));
+  $("camclose").addEventListener("click", camOff);
+
   // ── events from Jarvis ────────────────────────────────────────
   let stateSince = Date.now(), baseSub = "";
   function onEvent(ev) {
@@ -631,6 +668,9 @@ body.alarm { animation: alarm .5s steps(2) 6; }
       case "status": continua = !!ev.continua; if (state === "reposo" && continua) $("state").textContent = "A LA ESCUCHA"; tickerLines.unshift(ev.motor ? `Cerebro: ${ev.motor}` : "Cerebro sin conexión"); if (!ev.motor) toast("El cerebro de IA no responde. Revisa Ollama o tu clave de Claude."); break;
       case "alarm": sfx.alarm(); document.body.classList.remove("alarm"); void document.body.offsetWidth; document.body.classList.add("alarm"); toast(`⏰ Temporizador de ${ev.label} terminado`); break;
       case "notice": toast(ev.text); break;
+      case "camera": ev.on ? camOn() : camOff(); break;
+      case "camera_request": camFrame(ev.id); break;
+      case "pc": tickerLines.unshift(ev.texto || "Acción ejecutada"); typeTicker(ev.texto || ""); break;
     }
   }
   setInterval(() => { if (state === "pensando") { const s = Math.floor((Date.now() - stateSince) / 1000); if (s >= 2) $("sub").textContent = `${baseSub} ${s} s`; } }, 1000);
@@ -705,6 +745,9 @@ body.alarm { animation: alarm .5s steps(2) 6; }
     ["Pomodoro de 25 minutos", "TEMPORIZADOR", () => A.timer(1500)], ["Temporizador de 5 minutos", "TEMPORIZADOR", () => A.timer(300)], ["Temporizador de 1 minuto", "TEMPORIZADOR", () => A.timer(60)],
     ["Nueva nota", "NOTAS", () => $("noteinput").focus()], ["Ver conversación", "C", () => A.drawer("d-hist")], ["Cambiar voz", "V", () => A.drawer("d-voice")], ["Probar voz", "VOZ", A.testVoice],
     ["Modo cine", "H", A.cinema], ["Pantalla completa", "F", A.full], ["Actualizar datos", "DATOS", A.refresh],
+    ["Activar cámara", "VISIÓN", camOn], ["Apagar cámara", "VISIÓN", camOff],
+    ["¿Qué ves por la cámara?", "VISIÓN", () => A.ask("¿Qué ves?")], ["Explícame mi pantalla", "VISIÓN", () => A.ask("¿Qué hay en mi pantalla y qué hago?")],
+    ["Abrir YouTube", "PC", () => A.ask("abre YouTube")], ["Abrir calendario", "PC", () => A.ask("abre el calendario")], ["Abrir Gmail", "PC", () => A.ask("abre Gmail")],
     ["Silenciar micrófono", "PRIVACIDAD", () => A.mic(false)], ["Activar micrófono", "PRIVACIDAD", () => A.mic(true)], ["Borrar memoria", "MEMORIA", A.forget],
   ];
   let palSel = 0, palItems = CMDS;

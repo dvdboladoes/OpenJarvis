@@ -726,6 +726,55 @@ class JarvisBrain:
             self._remember(user_text, reply)
         self.last_reply = reply
 
+    def see(
+        self, question: str, image_b64: str, model: str, source: str = "camara"
+    ) -> Iterator[str]:
+        """Answer *question* about an image (camera frame or screenshot)."""
+        from openjarvis.core.types import Message, Role
+
+        where = "la cámara" if source == "camara" else "su pantalla"
+        system = (
+            f"Eres JARVIS, el asistente de {self.cfg.nombre or 'tu usuario'}. "
+            f"Estás viendo en directo una imagen de {where}. Responde a "
+            f"{self.cfg.honorific} en español de España, como en una charla: "
+            "práctico, cercano y concreto. Si pregunta qué hacer, dale los pasos "
+            "en orden, hablados (primero…, luego…). Describe solo lo que se ve; "
+            "si no se distingue bien, dilo. De dos a cinco frases. Empieza con una "
+            "etiqueta de tono como [sereno] o [alegre]. Sin markdown ni emojis."
+        )
+        messages = [
+            Message(role=Role.SYSTEM, content=system),
+            Message(role=Role.USER, content=question, images=[image_b64]),
+        ]
+        options = self._engine_options()
+        if options:
+            options["num_ctx"] = max(int(options.get("num_ctx", 0)), 4096)
+        splitter = SentenceSplitter()
+        spoken: List[str] = []
+        tokens = self._ensure_sdk().chat_stream(
+            messages,
+            model=model,
+            max_tokens=320,
+            temperature=0.4,
+            **options,
+        )
+        try:
+            for token in tokens:
+                if self.cancel_event is not None and self.cancel_event.is_set():
+                    break
+                for sentence in splitter.feed(token):
+                    spoken.append(sentence)
+                    yield sentence
+        finally:
+            close = getattr(tokens, "close", None)
+            if close is not None:
+                close()
+        for sentence in splitter.flush():
+            spoken.append(sentence)
+            yield sentence
+        if spoken:
+            self._remember(f"[{where}] {question}", " ".join(spoken))
+
     def _briefing_instruction(self, como: str) -> str:
         how = {"palmadas": "con dos palmadas", "voz": "diciendo Hey Jarvis"}.get(
             como, "desde la interfaz"
