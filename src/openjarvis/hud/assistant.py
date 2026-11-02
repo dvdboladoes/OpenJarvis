@@ -7,7 +7,12 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from openjarvis.hud.brain import JarvisBrain, is_sleep_command, offline_briefing
+from openjarvis.hud.brain import (
+    JarvisBrain,
+    is_cloud_model,
+    is_sleep_command,
+    offline_briefing,
+)
 from openjarvis.hud.config import HudConfig
 from openjarvis.hud.context import Snapshot, collect_snapshot
 from openjarvis.hud.server import EventHub, HudServer
@@ -139,6 +144,7 @@ class JarvisAssistant:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Motor de IA no disponible: %s", exc)
             status["motor"] = ""
+            self._engine_notice(exc)
         self.hub.publish("status", **status)
         if not self._session.locked():
             self._set_state("reposo", self._idle_hint())
@@ -197,6 +203,7 @@ class JarvisAssistant:
                 text = self.brain.briefing(source)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Briefing sin IA: %s", exc)
+                self._engine_notice(exc)
                 text = offline_briefing(self.cfg, snap)
             self._say(text)
             self._conversation()
@@ -241,6 +248,7 @@ class JarvisAssistant:
             reply = self.brain.reply(text)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Fallo del motor de IA: %s", exc)
+            self._engine_notice(exc)
             reply = "Lo siento, mi motor de lenguaje no responde en este momento."
         self._say(reply)
 
@@ -248,6 +256,33 @@ class JarvisAssistant:
         self.hub.publish("message", role="jarvis", text=text)
         self._set_state("hablando", "")
         self.speaker.say(text, on_level=self._voice_level)
+
+    def _engine_notice(self, exc: Exception) -> None:
+        """Explain in plain Spanish why the language model is not answering."""
+        msg = str(exc)
+        low = msg.lower()
+        model = self.cfg.modelo
+        if model and is_cloud_model(model):
+            if "api" in low and "key" in low or "authentication" in low or "401" in low:
+                hint = f"La clave de API para {model} no es válida o no está definida."
+            elif "no inference engine" in low or "unavailable" in low:
+                hint = (
+                    f"No puedo usar {model}: falta la clave de API (variable de "
+                    "entorno) o el paquete en la nube. Ejecuta: uv sync --extra "
+                    "desktop --extra hud --extra inference-cloud --group desktop-native"
+                )
+            else:
+                hint = f"El modelo {model} ha fallado: {msg[:160]}"
+        elif "no inference engine" in low or "connect" in low or "refused" in low:
+            hint = (
+                "Ollama no está en marcha o no tiene ningún modelo. Abre Ollama "
+                "y ejecuta: ollama pull qwen3:8b — o configura Claude en jarvis.toml."
+            )
+        elif "not found" in low and "model" in low:
+            hint = f"El modelo '{model or 'por defecto'}' no está descargado en Ollama."
+        else:
+            hint = f"El motor de IA ha fallado: {msg[:160]}"
+        self.hub.publish("notice", text=hint)
 
     # ── HUD API ────────────────────────────────────────────────────────
 
