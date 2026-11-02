@@ -206,3 +206,41 @@ def test_server_rejects_cross_origin_posts() -> None:
         assert err.value.code == 403
     finally:
         server.stop()
+
+
+# ── hearing / brain selection ───────────────────────────────────────────────
+
+
+def test_whisper_model_choice() -> None:
+    from openjarvis.hud.voice import choose_whisper_model
+
+    assert choose_whisper_model("auto", cuda=True) == (
+        "large-v3-turbo",
+        "cuda",
+        "float16",
+    )
+    assert choose_whisper_model("auto", cuda=False) == ("medium", "cpu", "int8")
+    assert choose_whisper_model("small", cuda=False)[0] == "small"
+
+
+def test_cloud_model_detection() -> None:
+    from openjarvis.hud.brain import is_cloud_model
+
+    assert is_cloud_model("claude-sonnet-5-5")
+    assert is_cloud_model("gpt-5")
+    assert is_cloud_model("gemini-3-flash")
+    assert not is_cloud_model("qwen3:8b")
+    assert not is_cloud_model("")
+
+
+def test_old_config_gets_new_sections(tmp_path) -> None:
+    from openjarvis.hud.config import load_hud_config
+
+    path = tmp_path / "jarvis.toml"
+    path.write_text('[usuario]\ntratamiento = "jefe"\n', encoding="utf-8")
+    cfg = load_hud_config(path)
+    text = path.read_text(encoding="utf-8")
+    assert cfg.honorific == "jefe"
+    assert "[oido]" in text and "[cerebro]" in text
+    assert text.count("[usuario]") == 1
+    assert load_hud_config(path).modelo_oido == "auto"

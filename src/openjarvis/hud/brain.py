@@ -43,7 +43,16 @@ CÓMO HABLAS:
 asteriscos, emojis, enlaces ni símbolos raros. Frases cortas y claras.
 - Los números y horas dilos como los diría una persona ("a las diez y media", \
 "veintitrés leads").
-- Sé breve: dos a cuatro frases salvo que te pidan detalle.
+- Por defecto, respuestas de dos a cinco frases; desarróllate más cuando la \
+pregunta lo merezca o te pidan detalle.
+
+CÓMO PIENSAS:
+- Eres proactivo: conecta datos (una reunión con un correo pendiente, una \
+métrica que cae con una tarea), anticipa lo que hará falta y sugiere el \
+siguiente paso concreto.
+- Razona antes de responder y da respuestas precisas, con criterio propio; \
+si algo es ambiguo, haz una sola pregunta corta.
+- Recuerdas lo hablado en esta conversación y lo usas.
 
 REGLAS:
 - Usa SOLO los datos de la sección DATOS DEL DÍA para hablar de agenda, correo, \
@@ -74,6 +83,15 @@ SLEEP_PHRASES = (
     "duérmete",
     "vete a dormir",
 )
+
+
+_CLOUD_PREFIXES = ("claude", "gpt-", "o1", "o3", "o4", "gemini", "openrouter/")
+
+
+def is_cloud_model(model: Optional[str]) -> bool:
+    """True for API models (Claude, GPT, Gemini…) served by the cloud engine."""
+    m = (model or "").strip().lower()
+    return bool(m) and m.startswith(_CLOUD_PREFIXES)
 
 
 def fecha_hablada(now: Optional[datetime] = None) -> str:
@@ -115,7 +133,10 @@ class JarvisBrain:
         if self._sdk is None:
             from openjarvis.sdk import Jarvis
 
-            self._sdk = Jarvis(model=self.cfg.modelo or None)
+            model = self.cfg.modelo or None
+            self._sdk = Jarvis(
+                model=model, engine_key="cloud" if is_cloud_model(model) else None
+            )
         return self._sdk
 
     def close(self) -> None:
@@ -154,7 +175,11 @@ class JarvisBrain:
             )
         messages.append(Message(role=Role.USER, content=user_text))
 
-        reply = self._ensure_sdk().chat(messages, max_tokens=self.cfg.max_tokens)
+        reply = self._ensure_sdk().chat(
+            messages,
+            max_tokens=self.cfg.max_tokens,
+            temperature=self.cfg.temperatura,
+        )
         reply = clean_for_speech(reply) or "Disculpe, no he podido procesar eso."
         if remember:
             self._history.append(("user", user_text))
@@ -206,6 +231,7 @@ __all__ = [
     "JarvisBrain",
     "clean_for_speech",
     "fecha_hablada",
+    "is_cloud_model",
     "is_sleep_command",
     "offline_briefing",
 ]

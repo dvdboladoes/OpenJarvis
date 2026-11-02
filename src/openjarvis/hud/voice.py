@@ -112,58 +112,196 @@ class Speaker:
             return False
 
 
+WHISPER_PROMPT = (
+    "Conversación en español con Jarvis, un asistente personal. "
+    "Hola Jarvis, ¿qué tengo hoy en la agenda? ¿Cuántos leads han entrado?"
+)
+
+
+def _cuda_available() -> bool:
+    try:
+        import ctranslate2
+
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def choose_whisper_model(requested: str, cuda: bool) -> tuple[str, str, str]:
+    """Return ``(model, device, compute_type)`` for faster-whisper.
+
+    ``auto`` picks the most accurate model the hardware can run in real time:
+    large-v3-turbo on an NVIDIA GPU, medium (int8) on CPU.
+    """
+    req = (requested or "auto").strip()
+    device = "cuda" if cuda else "cpu"
+    compute = "float16" if cuda else "int8"
+    if req == "auto":
+        return ("large-v3-turbo" if cuda else "medium"), device, compute
+    return req, device, compute
+
+
+class AdaptiveRecorder:
+    """Record one utterance, calibrating the silence threshold to the room.
+
+    The first ~0.3 s measure background noise; speech starts when the level
+    rises well above it and ends after a short pause. This works with quiet
+    microphones and noisy rooms where a fixed threshold either never triggers
+    or cuts sentences in half.
+    """
+
+    def __init__(
+        self,
+        *,
+        sample_rate: int = 16000,
+        end_silence: float = 1.0,
+        startup_timeout: float = 6.0,
+        max_seconds: float = 25.0,
+        on_level: Optional[LevelFn] = None,
+    ) -> None:
+        self.sample_rate = sample_rate
+        self.end_silence = end_silence
+        self.startup_timeout = startup_timeout
+        self.max_seconds = max_seconds
+        self.on_level = on_level
+
+    def record(self) -> "Any":
+        import numpy as np
+        import sounddevice as sd
+
+        block = int(self.sample_rate * 0.03)  # 30 ms
+        calib_blocks = 10
+        frames: list = []
+        rms_hist: list[float] = []
+        speech = False
+        quiet = 0
+        pre_roll = 10  # keep ~300 ms before speech starts
+        threshold = 0.0
+
+        with sd.InputStream(
+            samplerate=self.sample_rate, channels=1, dtype="float32", blocksize=block
+        ) as stream:
+            total = int(self.max_seconds / 0.03)
+            for i in range(total):
+                data, _ = stream.read(block)
+                chunk = np.asarray(data, dtype=np.float32).reshape(-1)
+                rms = float(np.sqrt(np.mean(chunk * chunk)) + 1e-7)
+                if self.on_level is not None:
+                    self.on_level(min(1.0, rms * 12))
+                frames.append(chunk)
+                if i < calib_blocks:
+                    rms_hist.append(rms)
+                    continue
+                if not threshold:
+                    ambient = float(np.median(rms_hist))
+                    threshold = max(0.008, ambient * 3.2)
+                if rms > threshold:
+                    if not speech:
+                        frames = frames[-pre_roll:]
+                    speech = True
+                    quiet = 0
+                elif speech:
+                    quiet += 1
+                    if quiet * 0.03 >= self.end_silence:
+                        break
+                elif i * 0.03 >= self.startup_timeout:
+                    return np.zeros(0, dtype=np.float32)
+                if not speech and len(frames) > pre_roll:
+                    frames = frames[-pre_roll:]
+        if not speech:
+            return np.zeros(0, dtype=np.float32)
+        audio = np.concatenate(frames)
+        peak = float(np.max(np.abs(audio))) or 1.0
+        return (audio / peak * 0.9).astype(np.float32)  # normalise quiet mics
+
+
 class Ear:
-    """Record one utterance and transcribe it."""
+    """Record one utterance and transcribe it (Whisper, Spanish-tuned)."""
 
-    def __init__(self, cfg: HudConfig) -> None:
+    def __init__(self, cfg: HudConfig, on_level: Optional[LevelFn] = None) -> None:
         self.cfg = cfg
-        self._backend: Any = None
+        self.on_level = on_level
+        self._model: Any = None
+        self._cloud: Any = None
         self._resolved = False
+        self.description = ""
 
-    def _resolve(self) -> Any:
-        if not self._resolved:
+    def _resolve(self) -> bool:
+        if self._resolved:
+            return self._model is not None or self._cloud is not None
+        self._resolved = True
+        if self.cfg.motor_oido == "openai":
             from openjarvis.core.config import load_config
-            from openjarvis.speech._discovery import get_speech_backend
+            from openjarvis.speech._discovery import _create_backend
 
-            config = load_config()
-            # A larger Whisper model hears Spanish much better than "base".
-            try:
-                if config.speech.model in ("tiny", "base"):
-                    config.speech.model = "small"
-                if config.speech.device == "auto":
-                    config.speech.compute_type = "int8"
-            except Exception:  # noqa: BLE001
-                pass
-            self._backend = get_speech_backend(config)
-            self._resolved = True
-        return self._backend
+            self._cloud = _create_backend("openai", load_config())
+            if self._cloud is not None:
+                self.description = "OpenAI (nube)"
+                return True
+            logger.warning("Falta OPENAI_API_KEY; uso Whisper local")
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            logger.warning("faster-whisper no instalado (uv sync --extra desktop)")
+            return False
+        name, device, compute = choose_whisper_model(
+            self.cfg.modelo_oido, _cuda_available()
+        )
+        try:
+            self._model = WhisperModel(name, device=device, compute_type=compute)
+        except Exception as exc:  # noqa: BLE001 - e.g. CUDA libs missing
+            logger.warning("Whisper %s en %s falló (%s); uso CPU", name, device, exc)
+            name, device, compute = choose_whisper_model(self.cfg.modelo_oido, False)
+            self._model = WhisperModel(name, device=device, compute_type=compute)
+        self.description = f"Whisper {name} ({'GPU' if device == 'cuda' else 'CPU'})"
+        return True
 
     @property
     def ready(self) -> bool:
-        return self._resolve() is not None
+        return self._resolve()
 
     def warm_up(self) -> None:
         """Load the speech model in advance so the first reply is fast."""
         self._resolve()
 
     def listen(self, startup_silence: float = 6.0) -> str:
-        from openjarvis.speech.voice_io import record_until_silence
-
-        backend = self._resolve()
-        if backend is None:
+        if not self._resolve():
             raise RuntimeError(
                 "No hay reconocimiento de voz disponible. "
                 "Instala las dependencias con: uv sync --extra desktop --extra hud"
             )
-        audio = record_until_silence(
-            silence_seconds=1.2, startup_silence_seconds=startup_silence
-        )
-        if len(audio) < 16000:  # < ~0.5 s of audio → nothing said
+        audio = AdaptiveRecorder(
+            startup_timeout=startup_silence, on_level=self.on_level
+        ).record()
+        if len(audio) < 16000 * 0.4:  # < 0.4 s → nothing said
             return ""
-        result = backend.transcribe(
-            audio, format="wav", language=self.cfg.idioma_escucha or None
+        return self.transcribe(audio)
+
+    def transcribe(self, audio: "Any") -> str:
+        lang = self.cfg.idioma_escucha or None
+        if self._cloud is not None:
+            import io
+
+            import soundfile as sf
+
+            buf = io.BytesIO()
+            sf.write(buf, audio, 16000, format="WAV", subtype="PCM_16")
+            result = self._cloud.transcribe(buf.getvalue(), format="wav", language=lang)
+            return (result.text or "").strip()
+        segments, _info = self._model.transcribe(
+            audio,
+            language=lang,
+            beam_size=5,
+            vad_filter=True,
+            condition_on_previous_text=False,
+            initial_prompt=WHISPER_PROMPT,
         )
-        return (result.text or "").strip()
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+        # Whisper sometimes hallucinates the prompt or stock phrases on silence.
+        junk = ("subtítulos", "gracias por ver", "amara.org", WHISPER_PROMPT[:30])
+        if any(j.lower() in text.lower() for j in junk) and len(text) < 80:
+            return ""
+        return text
 
 
-__all__ = ["Ear", "Speaker"]
+__all__ = ["AdaptiveRecorder", "Ear", "Speaker", "choose_whisper_model"]

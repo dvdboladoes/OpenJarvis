@@ -25,7 +25,7 @@ class JarvisAssistant:
         self.hub = EventHub()
         self.brain = JarvisBrain(cfg)
         self.speaker = Speaker(cfg)
-        self.ear = Ear(cfg)
+        self.ear = Ear(cfg, on_level=self._mic_level)
         self.server = HudServer(
             self.hub,
             {
@@ -120,7 +120,7 @@ class JarvisAssistant:
         }
         try:
             self.ear.warm_up()
-            status["oido"] = bool(self.ear.ready)
+            status["oido"] = self.ear.description if self.ear.ready else ""
         except Exception as exc:  # noqa: BLE001
             logger.warning("Reconocimiento de voz: %s", exc)
             status["oido"] = False
@@ -132,7 +132,10 @@ class JarvisAssistant:
         try:
             sdk = self.brain._ensure_sdk()  # noqa: SLF001
             sdk._ensure_engine()  # noqa: SLF001
-            status["motor"] = getattr(sdk, "_resolved_engine_key", "") or "ok"
+            engine = getattr(sdk, "_resolved_engine_key", "") or "ok"
+            status["motor"] = (
+                f"{self.cfg.modelo} ({engine})" if self.cfg.modelo else engine
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Motor de IA no disponible: %s", exc)
             status["motor"] = ""

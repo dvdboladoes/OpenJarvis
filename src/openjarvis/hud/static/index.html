@@ -405,7 +405,7 @@ button:focus-visible { outline: 2px solid var(--cyan-hot); outline-offset: 3px; 
   function renderStatus(s) {
     const wake = s.activacion || [];
     setSys("sys-wake", wake.length ? wake.map((w) => w === "voz" ? "«Hey Jarvis»" : "palmadas").join(" + ") : "solo botón", wake.length ? "ok" : "off");
-    setSys("sys-ear", s.oido ? "listo" : "sin instalar", s.oido ? "ok" : "bad");
+    setSys("sys-ear", s.oido ? (typeof s.oido === "string" ? s.oido : "listo") : "sin instalar", s.oido ? "ok" : "bad");
     setSys("sys-voice", s.voz || "—", s.voz && s.voz !== "—" ? "ok" : "bad");
     setSys("sys-engine", s.motor || "sin conexión", s.motor ? "ok" : "bad");
   }

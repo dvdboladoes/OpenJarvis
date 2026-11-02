@@ -42,9 +42,24 @@ voz = "es-ES-AlvaroNeural"        # edge: es-ES-AlvaroNeural, es-ES-ElviraNeural
 velocidad = 1.05
 idioma_escucha = "es"             # Idioma que entiende al escucharte
 
+[oido]
+# "local" = Whisper en tu PC (gratis). "openai" = en la nube, el que mejor
+# entiende (necesita la variable OPENAI_API_KEY; cuesta céntimos al día).
+motor = "local"
+# "auto" elige el mejor que tu PC mueve con soltura (large-v3-turbo con
+# tarjeta NVIDIA, medium sin ella). Opciones: small, medium, large-v3-turbo
+modelo = "auto"
+
 [cerebro]
-modelo = ""              # Vacío = el modelo por defecto de OpenJarvis
-max_tokens = 400
+# Vacío = el modelo local por defecto (Ollama). Para un Jarvis mucho más
+# listo usa uno en la nube y define su clave de API como variable de entorno:
+#   "claude-sonnet-5-5"  → ANTHROPIC_API_KEY   (recomendado)
+#   "gpt-5"              → OPENAI_API_KEY
+#   "gemini-3-flash"     → GEMINI_API_KEY
+# O un modelo local más grande, ej. "qwen3:14b" (antes: ollama pull qwen3:14b)
+modelo = ""
+max_tokens = 500
+temperatura = 0.6
 
 [briefing]
 # Fuentes conectadas con `jarvis connect gdrive` (Gmail, Calendar, Tasks)
@@ -91,8 +106,12 @@ class HudConfig:
     velocidad: float = 1.05
     idioma_escucha: str = "es"
 
+    motor_oido: str = "local"
+    modelo_oido: str = "auto"
+
     modelo: str = ""
-    max_tokens: int = 400
+    max_tokens: int = 500
+    temperatura: float = 0.6
 
     fuentes: List[str] = field(
         default_factory=lambda: ["gcalendar", "gmail", "google_tasks"]
@@ -143,6 +162,7 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     activ = data.get("activacion", {}) or {}
     voz = data.get("voz", {}) or {}
     cerebro = data.get("cerebro", {}) or {}
+    oido = data.get("oido", {}) or {}
     briefing = data.get("briefing", {}) or {}
     metricas = data.get("metricas", {}) or {}
     conv = data.get("conversacion", {}) or {}
@@ -166,8 +186,12 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.velocidad = _clamp(voz.get("velocidad", d.velocidad), 0.5, 2.0, 1.0)
     d.idioma_escucha = str(voz.get("idioma_escucha", d.idioma_escucha) or "")
 
+    d.motor_oido = str(oido.get("motor", d.motor_oido) or "local").lower()
+    d.modelo_oido = str(oido.get("modelo", d.modelo_oido) or "auto")
+
     d.modelo = str(cerebro.get("modelo", d.modelo) or "")
-    d.max_tokens = int(_clamp(cerebro.get("max_tokens", d.max_tokens), 64, 4096, 400))
+    d.max_tokens = int(_clamp(cerebro.get("max_tokens", d.max_tokens), 64, 4096, 500))
+    d.temperatura = _clamp(cerebro.get("temperatura", d.temperatura), 0.0, 1.5, 0.6)
 
     fuentes = briefing.get("fuentes", d.fuentes)
     d.fuentes = [str(s) for s in fuentes] if isinstance(fuentes, list) else d.fuentes
@@ -187,11 +211,49 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     return d
 
 
+def template_sections() -> Dict[str, str]:
+    """Split :data:`DEFAULT_TEMPLATE` into ``{table_name: text_block}``."""
+    blocks: Dict[str, str] = {}
+    current: Optional[str] = None
+    lines: List[str] = []
+    for line in DEFAULT_TEMPLATE.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if current:
+                blocks[current] = "".join(lines)
+            current, lines = stripped[1:-1], [line]
+        elif current:
+            lines.append(line)
+    if current:
+        blocks[current] = "".join(lines)
+    return blocks
+
+
+def add_missing_sections(target: Path, data: Dict[str, Any]) -> List[str]:
+    """Append template tables that an older ``jarvis.toml`` does not have yet.
+
+    New options then show up in the user's file with their explanations,
+    without touching anything they already customised.
+    """
+    missing = [
+        (name, block) for name, block in template_sections().items() if name not in data
+    ]
+    if missing:
+        with open(target, "a", encoding="utf-8") as fh:
+            for _name, block in missing:
+                fh.write("\n" + block.rstrip() + "\n")
+    return [name for name, _ in missing]
+
+
 def load_hud_config(path: Optional[Path] = None) -> HudConfig:
     """Load ``jarvis.toml`` (creating it with defaults on first run)."""
     target = ensure_config_file(path)
     with open(target, "rb") as fh:
         data = tomllib.load(fh)
+    try:
+        add_missing_sections(target, data)
+    except OSError:
+        pass
     return parse_hud_config(data, path=target)
 
 
