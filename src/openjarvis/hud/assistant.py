@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict, Optional
 
 from openjarvis.hud.brain import (
+    ActionRequest,
     JarvisBrain,
     Spoken,
     is_cloud_model,
@@ -17,14 +18,15 @@ from openjarvis.hud.brain import (
 )
 from openjarvis.hud.config import HudConfig, save_config_value
 from openjarvis.hud.context import Snapshot, collect_snapshot
+from openjarvis.hud.pc import Action, parse_command
 from openjarvis.hud.pc import execute as run_pc_action
-from openjarvis.hud.pc import parse_command
 from openjarvis.hud.server import EventHub, HudServer
 from openjarvis.hud.skills import NotesStore, TimerManager, parse_note, parse_timer
 from openjarvis.hud.vision import (
     SUGGESTED_LOCAL,
     FrameBroker,
     capture_screen,
+    parse_screen_watch,
     parse_vision,
     pick_vision_model,
 )
@@ -87,6 +89,9 @@ class JarvisAssistant:
                 "mic": self._api_mic,
                 "forget": self._api_forget,
                 "frame": self._api_frame,
+                "heard": self._api_heard,
+                "screen_watch": self._api_screen_watch,
+                "stt_unsupported": self._api_stt_unsupported,
             },
             port=cfg.puerto,
         )
@@ -101,6 +106,7 @@ class JarvisAssistant:
         self._snapshot_lock = threading.Lock()
         self._state = ""
         self._mood = "neutral"
+        self._screen_watch = False
         self.brain.cancel_event = self._cancel
 
     # ── public ─────────────────────────────────────────────────────────
@@ -153,7 +159,17 @@ class JarvisAssistant:
             and ("continua" in self.listener.detectors)
         )
 
+    @property
+    def browser_ears(self) -> bool:
+        return self.listener is not None and "navegador" in self.listener.detectors
+
     def _start_listener(self) -> None:
+        if self.cfg.escucha_continua and self.cfg.motor_oido == "navegador":
+            from openjarvis.hud.listening import BrowserListener
+
+            self.listener = BrowserListener(self.hub.publish)
+            self.listener.start()
+            return
         if self.cfg.escucha_continua:
             from openjarvis.hud.listening import ContinuousListener
 
@@ -205,8 +221,12 @@ class JarvisAssistant:
             "voz": self.cfg.motor_voz,
         }
         try:
-            self.ear.warm_up()
-            status["oido"] = self.ear.description if self.ear.ready else ""
+            if self.browser_ears:
+                status["oido"] = "Navegador (Microsoft)"
+                status["oido_navegador"] = True
+            else:
+                self.ear.warm_up()
+                status["oido"] = self.ear.description if self.ear.ready else ""
         except Exception as exc:  # noqa: BLE001
             logger.warning("Reconocimiento de voz: %s", exc)
             status["oido"] = False
@@ -344,6 +364,48 @@ class JarvisAssistant:
         if not self._session.locked():
             self._set_state("escuchando", "Le escucho…")
 
+    def _api_heard(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """The HUD page recognised a full sentence: answer it."""
+        text = str(payload.get("text", "")).strip()[:2000]
+        if not text or len(text) < 2:
+            return {"ok": False}
+        if self._session.locked():
+            return {"ok": False, "busy": True}
+        self._on_text(text)
+        return {"ok": True}
+
+    def _api_stt_unsupported(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        """The browser cannot do speech recognition: fall back to Whisper."""
+        if not self.browser_ears:
+            return {"ok": True}
+        logger.warning("El navegador no reconoce voz; uso Whisper local")
+        self.cfg.motor_oido = "local"
+        self.listener = None
+        if self._use_mic:
+            self._start_listener()
+        threading.Thread(target=self.ear.warm_up, daemon=True).start()
+        return {"ok": True}
+
+    def _on_text(self, text: str) -> None:
+        def _handle() -> None:
+            if not self._begin():
+                return
+            try:
+                self.hub.publish("message", role="user", text=text)
+                if is_sleep_command(text):
+                    self._say(
+                        Spoken(f"A su disposición, {self.cfg.honorific}.", "sereno")
+                    )
+                    return
+                self._get_snapshot()
+                self._answer(text)
+            except Exception:  # noqa: BLE001
+                logger.exception("Error respondiendo")
+            finally:
+                self._end()
+
+        threading.Thread(target=_handle, name="jarvis-heard", daemon=True).start()
+
     def _on_utterance(self, audio: Any) -> None:
         """Continuous mode: you finished a sentence → transcribe and answer."""
 
@@ -408,6 +470,10 @@ class JarvisAssistant:
     def _answer(self, text: str) -> None:
         if self._try_skill(text):
             return
+        if self._screen_watch:
+            # Real-time screen mode: every question comes with a fresh look.
+            self._look("pantalla", text)
+            return
         self._set_state("pensando", "Procesando…")
         self._say_stream(
             self.brain.stream_reply(text),
@@ -421,28 +487,63 @@ class JarvisAssistant:
         if self.cfg.control_pc:
             action = parse_command(text)
             if action is not None:
-                self._do_pc(action)
-                return True
+                return self._do_pc(action, text)
+        watch = parse_screen_watch(text)
+        if watch is not None:
+            self._set_screen_watch(watch)
+            self._say(
+                Spoken(
+                    "Entendido, ahora veo su pantalla en todo momento. Pregúnteme lo "
+                    "que quiera sobre lo que está haciendo."
+                    if watch
+                    else "De acuerdo, dejo de mirar su pantalla.",
+                    "sereno",
+                )
+            )
+            return True
         vis = parse_vision(text)
         if vis is not None:
             self._look(*vis)
             return True
         return self._try_quick_skill(text)
 
-    def _do_pc(self, action: Any) -> None:
+    def _do_pc(self, action: Any, text: str = "") -> bool:
+        """Run an instant PC command. Returns False to let Claude handle it."""
         if action.kind == "hud":
             self.hub.publish("camera", on=True)
             self._say(Spoken(f"{action.label}.", "alegre"))
-            return
+            return True
         try:
             said = run_pc_action(action)
             self.hub.publish("pc", accion=action.kind, texto=said)
             self._say(Spoken(said, "alegre"))
         except LookupError as exc:
+            if is_cloud_model(self.cfg.modelo) and text:
+                # Not an installed program ("abre Stripe", "abre mi banco"):
+                # let Claude work out the right website and open it.
+                return False
             self._say(Spoken(f"{exc} ¿Me lo dices con otro nombre?", "sereno"))
         except Exception as exc:  # noqa: BLE001
             logger.warning("Acción del PC fallida: %s", exc)
             self._say(Spoken("No he podido hacerlo, lo siento.", "empatico"))
+        return True
+
+    def _run_requested_action(self, req: "ActionRequest") -> None:
+        """Execute a ``<<kind:arg>>`` order that Claude wrote in its reply."""
+        kinds = {"web": "url", "youtube": "youtube", "buscar": "search", "app": "app"}
+        arg = req.arg
+        if req.kind == "web" and not arg.lower().startswith(("http://", "https://")):
+            arg = "https://" + arg.lstrip("/")
+        action = Action(kinds[req.kind], arg, "")
+        try:
+            run_pc_action(action)
+            self.hub.publish("pc", accion=action.kind, texto=f"{req.kind}: {req.arg}")
+        except LookupError:
+            # Unknown program: fall back to a web search for it.
+            run_pc_action(Action("search", req.arg, ""))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Orden %s fallida: %s", req, exc)
+            self.hub.publish("notice", text=f"No pude abrir {req.arg}.")
 
     def _vision_model(self) -> Optional[str]:
         if self.cfg.modelo_vision:
@@ -553,6 +654,14 @@ class JarvisAssistant:
                 for sentence in sentences:
                     if self._cancel.is_set():
                         break
+                    if isinstance(sentence, ActionRequest):
+                        # Open it right away, while Jarvis keeps talking.
+                        threading.Thread(
+                            target=self._run_requested_action,
+                            args=(sentence,),
+                            daemon=True,
+                        ).start()
+                        continue
                     text_q.put(sentence)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Fallo del motor de IA: %s", exc)
@@ -668,6 +777,11 @@ class JarvisAssistant:
         if self._state == "escuchando":
             return {"started": True}  # already listening to you
         self.interrupt()
+        if self.browser_ears:
+            # The page is always listening; just make sure it is switched on.
+            self._mic_enabled = True
+            self.listener.resume()
+            return {"started": True}
         return {"started": self.wake("ptt")}
 
     def _run_job(self, job: Any) -> bool:
@@ -773,6 +887,14 @@ class JarvisAssistant:
         if not self._session.locked():
             self._set_state("reposo", self._idle_hint())
         return {"on": self._mic_enabled}
+
+    def _set_screen_watch(self, on: bool) -> None:
+        self._screen_watch = bool(on)
+        self.hub.publish("screen_watch", on=self._screen_watch)
+
+    def _api_screen_watch(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self._set_screen_watch(bool(payload.get("on", not self._screen_watch)))
+        return {"on": self._screen_watch}
 
     def _api_frame(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         image = str(payload.get("image", ""))[:8_000_000]

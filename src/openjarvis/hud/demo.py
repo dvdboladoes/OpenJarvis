@@ -123,6 +123,11 @@ class DemoRunner:
                     self.hub.publish("mic", on=bool(p.get("on", True))) or {}
                 ),
                 "forget": lambda _p: {"ok": True},
+                "screen_watch": lambda p: (
+                    self.hub.publish("screen_watch", on=bool(p.get("on", True))) or {}
+                ),
+                "heard": lambda p: {"ok": self.wake(str(p.get("text", "")))},
+                "frame": lambda _p: {"ok": True},
             },
             port=cfg.puerto,
         )

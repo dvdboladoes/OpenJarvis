@@ -58,6 +58,26 @@ def parse_vision(text: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+_WATCH_ON = re.compile(
+    r"\b(mira|vigila|observa|sigue|ve|controla) (mi |la )?pantalla\b"
+    r"|\b(modo pantalla|ver mi pantalla|ve lo que hago|mira lo que hago)\b"
+)
+_WATCH_OFF = re.compile(
+    r"\b(deja de (mirar|ver|vigilar)|no mires|para de mirar|quita el modo pantalla"
+    r"|desactiva el modo pantalla)\b"
+)
+
+
+def parse_screen_watch(text: str) -> Optional[bool]:
+    """True = start watching the screen, False = stop, None = not about that."""
+    t = _fold(text)
+    if _WATCH_OFF.search(t):
+        return False
+    if _WATCH_ON.search(t) and len(t) < 60:
+        return True
+    return None
+
+
 def pick_vision_model(
     main_model: str, installed: List[str], is_cloud: bool
 ) -> Optional[str]:
@@ -130,6 +150,7 @@ __all__ = [
     "SUGGESTED_LOCAL",
     "capture_screen",
     "encode_jpeg",
+    "parse_screen_watch",
     "parse_vision",
     "pick_vision_model",
 ]

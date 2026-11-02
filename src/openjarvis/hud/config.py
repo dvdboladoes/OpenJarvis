@@ -47,9 +47,11 @@ velocidad = 1.05
 idioma_escucha = "es"             # Idioma que entiende al escucharte
 
 [oido]
-# "local" = Whisper en tu PC (gratis). "openai" = en la nube, el que mejor
-# entiende (necesita la variable OPENAI_API_KEY; cuesta céntimos al día).
-motor = "local"
+# "navegador" = reconocimiento de voz de Microsoft/Edge desde la interfaz:
+#   gratis, instantáneo y muy preciso en español (necesita la ventana del HUD).
+# "local" = Whisper en tu PC (sin internet, más lento).
+# "openai" = Whisper en la nube (necesita OPENAI_API_KEY).
+motor = "navegador"
 # "auto" elige el mejor que tu PC mueve con soltura (large-v3-turbo con
 # tarjeta NVIDIA, medium sin ella). Opciones: small, medium, large-v3-turbo
 modelo = "auto"
@@ -135,7 +137,7 @@ class HudConfig:
     velocidad: float = 1.05
     idioma_escucha: str = "es"
 
-    motor_oido: str = "local"
+    motor_oido: str = "navegador"
     modelo_oido: str = "auto"
 
     modelo: str = ""
@@ -228,7 +230,7 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.velocidad = _clamp(voz.get("velocidad", d.velocidad), 0.5, 2.0, 1.0)
     d.idioma_escucha = str(voz.get("idioma_escucha", d.idioma_escucha) or "")
 
-    d.motor_oido = str(oido.get("motor", d.motor_oido) or "local").lower()
+    d.motor_oido = str(oido.get("motor", d.motor_oido) or "navegador").lower()
     d.modelo_oido = str(oido.get("modelo", d.modelo_oido) or "auto")
 
     d.modelo = str(cerebro.get("modelo", d.modelo) or "")

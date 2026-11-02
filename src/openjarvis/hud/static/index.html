@@ -223,6 +223,25 @@ body.alarm { animation: alarm .5s steps(2) 6; }
 .cam .shot.go { animation: flash .5s ease-out; }
 .cam .close { position: absolute; right: 4px; top: 2px; }
 
+/* mini widget (screen-watch mode) */
+.watchtag { display: none; align-items: center; gap: 6px; font: 600 10px var(--display); letter-spacing: .16em; color: var(--accent); margin-top: 8px; }
+.watchtag i { width: 7px; height: 7px; border-radius: 50%; background: #ff3b4f; box-shadow: 0 0 8px #ff3b4f; animation: blink 1.2s infinite; }
+body.watching .watchtag { display: inline-flex; }
+body.mini .left, body.mini .right, body.mini .chips, body.mini .clock, body.mini .gauges,
+body.mini .ask, body.mini .brand .ticker, body.mini #b-hist, body.mini #b-voice, body.mini #b-cine,
+body.mini #b-full, body.mini #b-cam, body.mini .moodtag { display: none !important; }
+body.mini .hud { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; padding: 10px 12px; gap: 6px; }
+body.mini .brand h1 { font-size: 13px; letter-spacing: .3em; }
+body.mini .logo { width: 24px; height: 24px; }
+body.mini .center { padding-bottom: 0; }
+body.mini .state { font-size: 11px; }
+body.mini .sub { font-size: 11px; margin-top: 3px; }
+body.mini .subtitles { font-size: 14px; min-height: 0; max-height: 120px; overflow: hidden; margin-top: 6px; }
+body.mini .bottom { display: flex; justify-content: center; align-items: center; gap: 14px; }
+body.mini .mic { width: 50px; height: 50px; }
+body.mini .mic svg { width: 20px; height: 20px; }
+body.mini .tools { gap: 6px; }
+
 /* boot */
 .bootscreen { position: fixed; inset: 0; z-index: 50; background: #000; display: grid; place-items: center; transition: opacity .8s var(--ease); }
 .bootscreen.done { opacity: 0; pointer-events: none; }
@@ -274,6 +293,7 @@ body.alarm { animation: alarm .5s steps(2) 6; }
     <div class="state" id="state">INICIANDO</div>
     <div class="sub" id="sub"></div>
     <div class="moodtag" id="moodtag" hidden><i></i><span id="moodname"></span></div>
+    <div class="watchtag"><i></i>VIENDO TU PANTALLA</div>
     <div class="subtitles" id="subs" aria-live="polite"></div>
   </main>
 
@@ -298,6 +318,7 @@ body.alarm { animation: alarm .5s steps(2) 6; }
       <form class="ask" id="askform"><input id="askinput" placeholder="Escribe a Jarvis…   Ctrl+K comandos" aria-label="Escribe a Jarvis" autocomplete="off"></form>
       <button class="ibtn" id="b-hist" title="Conversación (C)" aria-label="Conversación"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg></button>
       <button class="ibtn" id="b-voice" title="Voz y ajustes (V)" aria-label="Voz y ajustes"><svg viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg></button>
+      <button class="ibtn" id="b-screen" title="Ver mi pantalla en tiempo real (M)" aria-label="Ver mi pantalla"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="1"/><path d="M8 20h8M12 16v4"/></svg></button>
       <button class="ibtn" id="b-cam" title="Cámara" aria-label="Cámara"><svg viewBox="0 0 24 24"><path d="M3 7h4l2-3h6l2 3h4v12H3z"/><circle cx="12" cy="13" r="4"/></svg></button>
       <button class="ibtn" id="b-cine" title="Modo cine (H)" aria-label="Modo cine"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 9h18M3 15h18"/></svg></button>
       <button class="ibtn" id="b-full" title="Pantalla completa (F)" aria-label="Pantalla completa"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
@@ -642,7 +663,60 @@ body.alarm { animation: alarm .5s steps(2) 6; }
     post("frame", { id, image: c.toDataURL("image/jpeg", .82) });
   }
   $("b-cam").addEventListener("click", () => (camStream ? camOff() : camOn()));
+
+  // ── screen-watch mode: Jarvis sees the screen, HUD shrinks to a widget ─
+  let watching = false, bigSize = null;
+  function enterMini() {
+    if (document.body.classList.contains("mini")) return;
+    bigSize = { w: window.outerWidth, h: window.outerHeight, x: window.screenX, y: window.screenY };
+    document.body.classList.add("mini");
+    try { window.resizeTo(380, 470); window.moveTo(screen.availLeft + screen.availWidth - 395, screen.availTop + screen.availHeight - 485); } catch (_) {}
+  }
+  function exitMini() {
+    if (!document.body.classList.contains("mini")) return;
+    document.body.classList.remove("mini");
+    try { const b = bigSize || { w: 1600, h: 900, x: 40, y: 40 }; window.resizeTo(b.w, b.h); window.moveTo(b.x, b.y); } catch (_) {}
+  }
+  function setWatching(on) {
+    watching = !!on; document.body.classList.toggle("watching", watching); $("b-screen").classList.toggle("on", watching);
+    watching ? enterMini() : exitMini();
+  }
+  $("b-screen").addEventListener("click", () => post("screen_watch", { on: !watching }));
   $("camclose").addEventListener("click", camOff);
+
+  // ── ears: Edge / Chrome speech recognition (instant, accurate) ─
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, wantListen = false, recRunning = false, recErrors = 0;
+  function recStart() {
+    if (!SR) { post("stt_unsupported"); return; }
+    wantListen = true;
+    if (recRunning) return;
+    if (!rec) {
+      rec = new SR(); rec.lang = "es-ES"; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+      rec.onstart = () => { recRunning = true; };
+      rec.onend = () => { recRunning = false; if (wantListen && micOn) setTimeout(recStart, recErrors > 3 ? 2000 : 120); };
+      rec.onerror = (e) => {
+        recErrors++;
+        if (e.error === "not-allowed" || e.error === "service-not-allowed") { wantListen = false; toast("No tengo permiso para usar el micrófono en esta ventana."); }
+        else if (e.error === "network") toast("El reconocimiento de voz necesita conexión a internet.");
+        else if (e.error === "audio-capture") toast("No encuentro ningún micrófono.");
+      };
+      rec.onresult = (e) => {
+        recErrors = 0; let fin = "", inter = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) { const r = e.results[i]; (r.isFinal ? (fin += r[0].transcript) : (inter += r[0].transcript)); }
+        if (inter.trim()) {
+          if (state === "reposo") { document.body.dataset.state = "escuchando"; $("state").textContent = "ESCUCHANDO"; }
+          subtitles(inter.trim(), "user"); mic = Math.max(mic, .55 + Math.random() * .35);
+        }
+        if (fin.trim()) {
+          const t = fin.trim(); subtitles(t, "user"); wantListen = false; try { rec.stop(); } catch (_) {}
+          post("heard", { text: t }).then((r) => { if (!(r && r.ok && r.result && r.result.ok)) recStart(); });
+        }
+      };
+    }
+    try { rec.start(); } catch (_) {}
+  }
+  function recStop() { wantListen = false; if (rec && recRunning) { try { rec.abort(); } catch (_) {} } }
 
   // ── events from Jarvis ────────────────────────────────────────
   let stateSince = Date.now(), baseSub = "";
@@ -664,11 +738,13 @@ body.alarm { animation: alarm .5s steps(2) 6; }
       case "timers": timers = ev.items || []; renderTimers(); break;
       case "notes": renderNotes(ev.items || []); break;
       case "voices": voices = ev.items || []; actual = ev.actual || {}; renderVoices(); break;
-      case "mic": micOn = !!ev.on; $("sw-mic").classList.toggle("on", micOn); $("mic").classList.toggle("off", !micOn); break;
+      case "mic": micOn = !!ev.on; if (!micOn) recStop(); $("sw-mic").classList.toggle("on", micOn); $("mic").classList.toggle("off", !micOn); break;
       case "status": continua = !!ev.continua; if (state === "reposo" && continua) $("state").textContent = "A LA ESCUCHA"; tickerLines.unshift(ev.motor ? `Cerebro: ${ev.motor}` : "Cerebro sin conexión"); if (!ev.motor) toast("El cerebro de IA no responde. Revisa Ollama o tu clave de Claude."); break;
       case "alarm": sfx.alarm(); document.body.classList.remove("alarm"); void document.body.offsetWidth; document.body.classList.add("alarm"); toast(`⏰ Temporizador de ${ev.label} terminado`); break;
       case "notice": toast(ev.text); break;
       case "camera": ev.on ? camOn() : camOff(); break;
+      case "screen_watch": setWatching(ev.on); break;
+      case "listen": (ev.on && micOn) ? recStart() : recStop(); if (!ev.on && state === "escuchando") { /* server took over */ } break;
       case "camera_request": camFrame(ev.id); break;
       case "pc": tickerLines.unshift(ev.texto || "Acción ejecutada"); typeTicker(ev.texto || ""); break;
     }
@@ -745,6 +821,9 @@ body.alarm { animation: alarm .5s steps(2) 6; }
     ["Pomodoro de 25 minutos", "TEMPORIZADOR", () => A.timer(1500)], ["Temporizador de 5 minutos", "TEMPORIZADOR", () => A.timer(300)], ["Temporizador de 1 minuto", "TEMPORIZADOR", () => A.timer(60)],
     ["Nueva nota", "NOTAS", () => $("noteinput").focus()], ["Ver conversación", "C", () => A.drawer("d-hist")], ["Cambiar voz", "V", () => A.drawer("d-voice")], ["Probar voz", "VOZ", A.testVoice],
     ["Modo cine", "H", A.cinema], ["Pantalla completa", "F", A.full], ["Actualizar datos", "DATOS", A.refresh],
+    ["Ver mi pantalla en tiempo real", "VISIÓN", () => post("screen_watch", { on: true })],
+    ["Dejar de ver la pantalla", "VISIÓN", () => post("screen_watch", { on: false })],
+    ["Modo mini", "M", () => (document.body.classList.contains("mini") ? exitMini() : enterMini())],
     ["Activar cámara", "VISIÓN", camOn], ["Apagar cámara", "VISIÓN", camOff],
     ["¿Qué ves por la cámara?", "VISIÓN", () => A.ask("¿Qué ves?")], ["Explícame mi pantalla", "VISIÓN", () => A.ask("¿Qué hay en mi pantalla y qué hago?")],
     ["Abrir YouTube", "PC", () => A.ask("abre YouTube")], ["Abrir calendario", "PC", () => A.ask("abre el calendario")], ["Abrir Gmail", "PC", () => A.ask("abre Gmail")],
@@ -778,6 +857,7 @@ body.alarm { animation: alarm .5s steps(2) 6; }
     if (typing) return;
     if (e.code === "Space" && !e.repeat) { e.preventDefault(); A.listen(); }
     const k = e.key.toLowerCase();
+    if (k === "m") post("screen_watch", { on: !watching });
     if (k === "h") A.cinema(); if (k === "f") A.full(); if (k === "c") A.drawer("d-hist"); if (k === "v") A.drawer("d-voice"); if (k === "b") A.briefing();
   });
 })();

@@ -203,4 +203,35 @@ class ContinuousListener:
                 self._stop.wait(3.0)
 
 
-__all__ = ["ContinuousListener", "SpeechSegmenter"]
+class BrowserListener:
+    """Speech recognition runs in the HUD page (Edge's Web Speech API).
+
+    The page streams what you say and posts each finished sentence to
+    ``/api/heard``. This object only tells the page when to listen: it is
+    paused while Jarvis thinks or speaks so it never hears itself.
+    """
+
+    def __init__(self, publish: Callable[..., None]) -> None:
+        self._publish = publish
+        self.active = False
+
+    @property
+    def detectors(self) -> List[str]:
+        return ["continua", "navegador"]
+
+    def start(self) -> None:
+        self.resume()
+
+    def pause(self) -> None:
+        self.active = False
+        self._publish("listen", on=False)
+
+    def resume(self) -> None:
+        self.active = True
+        self._publish("listen", on=True)
+
+    def stop(self) -> None:
+        self.pause()
+
+
+__all__ = ["BrowserListener", "ContinuousListener", "SpeechSegmenter"]

@@ -75,6 +75,23 @@ DATOS DEL DÍA; si algo no está, dilo con naturalidad y nunca lo inventes.
 - Para todo lo demás, usa tu conocimiento general con libertad.
 """
 
+PC_CONTROL = """
+CONTROL DEL ORDENADOR:
+Tienes acceso al ordenador de tu usuario y puedes abrir cosas en él. Cuando te \
+pida abrir, poner, ver o buscar algo, hazlo escribiendo UNA orden con este \
+formato exacto (la orden no se lee en voz alta):
+<<web:URL completa>> abre una web (usa la URL oficial; por ejemplo la del \
+panel de Stripe es https://dashboard.stripe.com)
+<<youtube:búsqueda>> pone en YouTube el primer vídeo de esa búsqueda (por \
+ejemplo "<<youtube:Ibai último vídeo>>" o "<<youtube:música lofi para \
+concentrarse>>")
+<<buscar:texto>> busca en Google
+<<app:nombre>> abre un programa instalado (Spotify, Word, Excel, Chrome…)
+Acompaña la orden con una frase corta y natural diciendo lo que haces. Nunca \
+digas que no puedes abrir cosas: sí puedes. No inventes direcciones de \
+páginas que no conozcas: en ese caso usa <<buscar:…>>.
+"""
+
 # Short persona for local models on a CPU: every token of the system prompt
 # must be read on each turn, so this one is ~5x smaller than PERSONA.
 PERSONA_LITE = """\
@@ -305,6 +322,28 @@ def is_sleep_command(text: str) -> bool:
     return any(p in t for p in SLEEP_PHRASES)
 
 
+class ActionRequest:
+    """A PC action Claude asked for inside its reply: ``<<web:https://…>>``."""
+
+    KINDS = ("web", "youtube", "buscar", "app")
+
+    def __init__(self, kind: str, arg: str) -> None:
+        self.kind = kind
+        self.arg = arg
+
+    def __repr__(self) -> str:
+        return f"ActionRequest({self.kind!r}, {self.arg!r})"
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, ActionRequest) and (self.kind, self.arg) == (
+            other.kind,
+            other.arg,
+        )
+
+
+_ACTION_RE = re.compile(r"<<\s*([a-záéíóú]+)\s*:\s*(.+?)\s*>>", re.I | re.S)
+
+
 class SentenceSplitter:
     """Turn a token stream into speakable sentences.
 
@@ -353,8 +392,33 @@ class SentenceSplitter:
                 i = j + len("<think>")
         return "".join(out)
 
+    def _take_actions(self) -> tuple[List["ActionRequest"], str]:
+        """Pull complete ``<<kind:arg>>`` tags out of the buffer.
+
+        Returns the actions and any trailing, still-incomplete tag text that
+        must stay out of sentence splitting until its ``>>`` arrives.
+        """
+        actions: List[ActionRequest] = []
+
+        def _sub(m: "re.Match[str]") -> str:
+            kind = m.group(1).lower()
+            if kind in ActionRequest.KINDS:
+                actions.append(ActionRequest(kind, m.group(2).strip()))
+            return " "
+
+        self._buf = _ACTION_RE.sub(_sub, self._buf)
+        hold = ""
+        start = self._buf.find("<<")
+        if start >= 0:
+            self._buf, hold = self._buf[:start], self._buf[start:]
+        elif self._buf.endswith("<"):
+            self._buf, hold = self._buf[:-1], "<"
+        return actions, hold
+
     def feed(self, token: str) -> List[str]:
         self._buf += token
+        actions, hold = self._take_actions()
+        out_actions: List = list(actions)
         if "<think>" in self._buf or self._in_think:
             head, sep, tail = self._buf.rpartition("<")
             # keep a possibly half-received tag in the buffer
@@ -376,12 +440,14 @@ class SentenceSplitter:
             cleaned = clean_for_speech(self._take_moods(sentence))
             if cleaned:
                 out.append(Spoken(cleaned, self.mood))
-        return out
+        self._buf += hold
+        return out_actions + out
 
     def flush(self) -> List[str]:
+        actions, hold = self._take_actions()
         rest = clean_for_speech(self._take_moods(self._strip_think(self._buf)))
         self._buf = ""
-        return [Spoken(rest, self.mood)] if rest else []
+        return list(actions) + ([Spoken(rest, self.mood)] if rest else [])
 
 
 class JarvisBrain:
@@ -399,6 +465,7 @@ class JarvisBrain:
         self._model: Optional[str] = None
         self.last_reply = ""
         self.last_mood = "neutral"
+        self.last_actions: List["ActionRequest"] = []
         self._memory_path = memory_path
         # Set by the assistant; checked on every token so an interruption
         # stops generation immediately.
@@ -631,6 +698,8 @@ class JarvisBrain:
         quien = self.cfg.nombre or "tu usuario"
         persona = PERSONA_LITE if self.lite else PERSONA
         base = persona.format(quien=quien, tratamiento=self.cfg.honorific)
+        if self.cfg.control_pc and not self.lite:
+            base += PC_CONTROL
         # No clock time here: the system prompt must stay identical between
         # questions so Ollama can reuse its cached prefix (big speed-up on a
         # CPU). The current time travels with each user message instead.
@@ -701,7 +770,9 @@ class JarvisBrain:
         else:
             raise last_exc or RuntimeError("model failed")
         splitter = SentenceSplitter()
-        reply = " ".join(splitter.feed(reply) + splitter.flush())
+        parts = splitter.feed(reply) + splitter.flush()
+        self.last_actions = [p for p in parts if isinstance(p, ActionRequest)]
+        reply = " ".join(p for p in parts if not isinstance(p, ActionRequest))
         self.last_mood = splitter.mood
         reply = reply or "Disculpe, no he podido procesar eso."
         if remember:
@@ -734,6 +805,9 @@ class JarvisBrain:
                         interrupted = True
                         break
                     for sentence in splitter.feed(token):
+                        if isinstance(sentence, ActionRequest):
+                            yield sentence
+                            continue
                         if (
                             not spoken
                             and attempt["history"]
@@ -761,7 +835,8 @@ class JarvisBrain:
                     close()  # cancels the engine stream if we stopped early
         if not interrupted:
             for sentence in splitter.flush():
-                spoken.append(sentence)
+                if not isinstance(sentence, ActionRequest):
+                    spoken.append(sentence)
                 yield sentence
         self.last_mood = splitter.mood
         reply = " ".join(spoken) or "Disculpe, no he podido procesar eso."
@@ -785,12 +860,22 @@ class JarvisBrain:
             "práctico, cercano y concreto. Si pregunta qué hacer, dale los pasos "
             "en orden, hablados (primero…, luego…). Describe solo lo que se ve; "
             "si no se distingue bien, dilo. De dos a cinco frases. Empieza con una "
-            "etiqueta de tono como [sereno] o [alegre]. Sin markdown ni emojis."
+            "etiqueta de tono como [sereno] o [alegre]. Sin markdown ni emojis. "
+            "Si la pregunta no tiene que ver con la imagen, respóndela con "
+            "normalidad, como en cualquier conversación."
         )
-        messages = [
-            Message(role=Role.SYSTEM, content=system),
-            Message(role=Role.USER, content=question, images=[image_b64]),
-        ]
+        if self.cfg.control_pc and is_cloud_model(model):
+            system += "\n" + PC_CONTROL
+        messages = [Message(role=Role.SYSTEM, content=system)]
+        # Keep the thread of the conversation while looking.
+        for role, content in clean_history(self._history)[-6:]:
+            messages.append(
+                Message(
+                    role=Role.USER if role == "user" else Role.ASSISTANT,
+                    content=content,
+                )
+            )
+        messages.append(Message(role=Role.USER, content=question, images=[image_b64]))
         options = self._engine_options()
         if options:
             options["num_ctx"] = max(int(options.get("num_ctx", 0)), 4096)
@@ -808,17 +893,19 @@ class JarvisBrain:
                 if self.cancel_event is not None and self.cancel_event.is_set():
                     break
                 for sentence in splitter.feed(token):
-                    spoken.append(sentence)
+                    if not isinstance(sentence, ActionRequest):
+                        spoken.append(sentence)
                     yield sentence
         finally:
             close = getattr(tokens, "close", None)
             if close is not None:
                 close()
         for sentence in splitter.flush():
-            spoken.append(sentence)
+            if not isinstance(sentence, ActionRequest):
+                spoken.append(sentence)
             yield sentence
         if spoken:
-            self._remember(f"[{where}] {question}", " ".join(spoken))
+            self._remember(question, " ".join(spoken))
 
     def _briefing_instruction(self, como: str) -> str:
         how = {"palmadas": "con dos palmadas", "voz": "diciendo Hey Jarvis"}.get(
@@ -873,6 +960,7 @@ def offline_briefing(cfg: HudConfig, snapshot: "Snapshot") -> str:
 
 __all__ = [
     "MOODS",
+    "ActionRequest",
     "JarvisBrain",
     "SentenceSplitter",
     "Spoken",

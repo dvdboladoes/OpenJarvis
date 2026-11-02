@@ -66,6 +66,20 @@ SITES: Dict[str, str] = {
     "canva": "https://www.canva.com",
     "spotify web": "https://open.spotify.com",
     "traductor": "https://translate.google.com",
+    "stripe": "https://dashboard.stripe.com",
+    "paypal": "https://www.paypal.com",
+    "outlook": "https://outlook.live.com",
+    "hotmail": "https://outlook.live.com",
+    "onedrive": "https://onedrive.live.com",
+    "google sheets": "https://sheets.google.com",
+    "hojas de calculo": "https://sheets.google.com",
+    "google docs": "https://docs.google.com",
+    "documentos de google": "https://docs.google.com",
+    "meet": "https://meet.google.com",
+    "google meet": "https://meet.google.com",
+    "pinterest": "https://www.pinterest.com",
+    "reddit": "https://www.reddit.com",
+    "wallapop": "https://es.wallapop.com",
 }
 
 # Windows programs reachable without searching the Start Menu.

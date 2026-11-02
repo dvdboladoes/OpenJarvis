@@ -450,7 +450,7 @@ def test_save_config_value(tmp_path) -> None:
     save_config_value(p, "voz", "voz", "en-US-AndrewMultilingualNeural")
     cfg = load_hud_config(p)
     assert cfg.voz == "en-US-AndrewMultilingualNeural"
-    assert cfg.motor_oido == "local"  # other sections untouched
+    assert cfg.motor_oido == "navegador"  # other sections untouched
 
 
 def test_lite_mode_for_local_models() -> None:
@@ -896,3 +896,102 @@ def test_cloud_problem_messages(monkeypatch) -> None:
     monkeypatch.setattr(_u, "find_spec", lambda name: None)
     assert "conector" in cloud_problem("claude-haiku-5-5")
     assert cloud_problem("qwen3:1.7b") is None
+
+
+# ── v3: browser ears, Claude actions, screen watch ─────────────────────────
+
+
+def test_splitter_extracts_action_orders() -> None:
+    from openjarvis.hud.brain import ActionRequest, SentenceSplitter
+
+    sp = SentenceSplitter()
+    out: list = []
+    for tok in [
+        "[alegre] ¡Hecho! Le abro Stri",
+        "pe. <<we",
+        "b:https://dashboard.stri",
+        "pe.com>> ¿Algo más?",
+    ]:
+        out += sp.feed(tok)
+    out += sp.flush()
+    assert ActionRequest("web", "https://dashboard.stripe.com") in out
+    assert [str(x) for x in out if not isinstance(x, ActionRequest)] == [
+        "¡Hecho!",
+        "Le abro Stripe.",
+        "¿Algo más?",
+    ]
+
+
+def test_requested_actions_are_executed(monkeypatch) -> None:
+    from openjarvis.hud import assistant as amod
+    from openjarvis.hud.assistant import JarvisAssistant
+    from openjarvis.hud.brain import ActionRequest
+    from openjarvis.hud.config import HudConfig
+
+    a = JarvisAssistant(
+        HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
+    )
+    ran: list = []
+    monkeypatch.setattr(
+        amod, "run_pc_action", lambda act: ran.append((act.kind, act.arg))
+    )
+    a._run_requested_action(ActionRequest("web", "dashboard.stripe.com"))  # noqa: SLF001
+    a._run_requested_action(ActionRequest("youtube", "lofi"))  # noqa: SLF001
+    assert ran == [("url", "https://dashboard.stripe.com"), ("youtube", "lofi")]
+    a.timers.stop()
+    a.server._httpd.server_close()  # noqa: SLF001
+
+
+def test_unknown_app_goes_to_claude(monkeypatch) -> None:
+    from openjarvis.hud import assistant as amod
+    from openjarvis.hud.assistant import JarvisAssistant
+    from openjarvis.hud.config import HudConfig
+
+    a = JarvisAssistant(
+        HudConfig(
+            puerto=0, fuentes=[], incluir_tiempo=False, modelo="claude-haiku-5-5"
+        ),
+        mic=False,
+    )
+
+    def not_found(act):  # type: ignore[no-untyped-def]
+        raise LookupError("no")
+
+    monkeypatch.setattr(amod, "run_pc_action", not_found)
+    assert not a._try_skill("abre mi banco")  # noqa: SLF001 - falls through to Claude
+    a.timers.stop()
+    a.server._httpd.server_close()  # noqa: SLF001
+
+
+def test_screen_watch_routes_questions_to_vision() -> None:
+    from openjarvis.hud.assistant import JarvisAssistant
+    from openjarvis.hud.config import HudConfig
+    from openjarvis.hud.vision import parse_screen_watch
+
+    assert parse_screen_watch("Jarvis, mira mi pantalla") is True
+    assert parse_screen_watch("deja de mirar la pantalla") is False
+    assert parse_screen_watch("¿qué tal?") is None
+
+    a = JarvisAssistant(
+        HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
+    )
+    looked: list = []
+    a._look = lambda source, q: looked.append((source, q))  # type: ignore[method-assign]  # noqa: SLF001
+    a._say = lambda text: None  # type: ignore[method-assign]  # noqa: SLF001
+    assert a._try_skill("mira mi pantalla")  # noqa: SLF001
+    a._answer("¿cómo exporto esto a PDF?")  # noqa: SLF001
+    assert looked == [("pantalla", "¿cómo exporto esto a PDF?")]
+    a.timers.stop()
+    a.server._httpd.server_close()  # noqa: SLF001
+
+
+def test_browser_listener_toggles_page_listening() -> None:
+    from openjarvis.hud.listening import BrowserListener
+
+    events: list = []
+    bl = BrowserListener(lambda kind, **d: events.append((kind, d["on"])))
+    bl.start()
+    bl.pause()
+    bl.resume()
+    assert events == [("listen", True), ("listen", False), ("listen", True)]
+    assert "navegador" in bl.detectors
