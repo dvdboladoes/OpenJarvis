@@ -573,3 +573,16 @@ def test_complete_falls_back_to_thinking_mode() -> None:
     assert len(seen) == 3
     assert seen[0][0] > seen[1][0]  # retries drop the history
     assert seen[2][1]["think"] is None and seen[2][1]["max_tokens"] >= 700
+
+
+def test_cpu_only_option() -> None:
+    from openjarvis.hud.brain import JarvisBrain
+    from openjarvis.hud.config import HudConfig, parse_hud_config
+
+    assert parse_hud_config({"cerebro": {"usar_gpu": False}}).usar_gpu is False
+    b = JarvisBrain(HudConfig(usar_gpu=False), memory_path="/nonexistent/m.json")
+    b._model = "qwen3:1.7b"  # noqa: SLF001
+    assert b._engine_options()["num_gpu"] == 0  # noqa: SLF001
+    b2 = JarvisBrain(HudConfig(), memory_path="/nonexistent/m.json")
+    b2._model = "qwen3:1.7b"  # noqa: SLF001
+    assert "num_gpu" not in b2._engine_options()  # noqa: SLF001

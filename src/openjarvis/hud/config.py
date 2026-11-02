@@ -67,6 +67,9 @@ modo = "auto"
 # Memoria de trabajo del modelo local, en tokens. Más grande = recuerda más
 # texto pero gasta más RAM. 0 = automático (3072 en modo ligero).
 contexto = 0
+# Pon false si el modelo local responde con texto sin sentido: algunas
+# gráficas integradas calculan mal y es mejor usar solo el procesador.
+usar_gpu = true
 max_tokens = 500
 temperatura = 0.6
 
@@ -122,6 +125,7 @@ class HudConfig:
     motor_cerebro: str = "auto"
     modo_cerebro: str = "auto"
     contexto: int = 0
+    usar_gpu: bool = True
     max_tokens: int = 500
     temperatura: float = 0.6
 
@@ -205,6 +209,7 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.motor_cerebro = str(cerebro.get("motor", d.motor_cerebro) or "auto")
     d.modo_cerebro = str(cerebro.get("modo", d.modo_cerebro) or "auto")
     d.contexto = int(_clamp(cerebro.get("contexto", 0) or 0, 0, 131072, 0))
+    d.usar_gpu = bool(cerebro.get("usar_gpu", d.usar_gpu))
     d.max_tokens = int(_clamp(cerebro.get("max_tokens", d.max_tokens), 64, 4096, 500))
     d.temperatura = _clamp(cerebro.get("temperatura", d.temperatura), 0.0, 1.5, 0.6)
 
