@@ -196,6 +196,48 @@ def pick_installed_model(wanted: str, available: List[str]) -> str:
     return (chat or available)[0]
 
 
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-záéíóúñü0-9]+", " ", (text or "").lower()).strip()
+
+
+def similar(a: str, b: str, chars: int = 70) -> bool:
+    """True when two replies open the same way (a model repeating itself)."""
+    from difflib import SequenceMatcher
+
+    na, nb = _norm(a), _norm(b)
+    if not na or not nb:
+        return False
+    if na.startswith(nb[:chars]) or nb.startswith(na[:chars]):
+        return True
+    n = min(len(na), len(nb), 160)
+    return n >= 30 and SequenceMatcher(None, na[:n], nb[:n]).ratio() >= 0.75
+
+
+def clean_history(history: List[tuple]) -> List[tuple]:
+    """Drop what makes small models parrot themselves.
+
+    Keeps only user→assistant exchanges (a reply without a question before
+    it, like an old briefing, is dropped) and removes assistant replies that
+    repeat an earlier one.
+    """
+    out: List[tuple] = []
+    seen: List[str] = []
+    pending_user: Optional[tuple] = None
+    for role, content in history:
+        if role == "user":
+            pending_user = (role, content)
+            continue
+        if pending_user is None:
+            continue
+        if any(similar(content, s) for s in seen):
+            pending_user = None
+            continue
+        out += [pending_user, (role, content)]
+        seen.append(content)
+        pending_user = None
+    return out
+
+
 def fecha_hablada(now: Optional[datetime] = None) -> str:
     now = now or datetime.now()
     return f"{_DIAS[now.weekday()]} {now.day} de {_MESES[now.month - 1]}"
@@ -203,6 +245,9 @@ def fecha_hablada(now: Optional[datetime] = None) -> str:
 
 def clean_for_speech(text: str) -> str:
     """Strip markdown/emoji that a model may still emit, so TTS sounds natural."""
+    # Small models sometimes wrap words in the emotion-tag brackets
+    # ("[Buenos días!]"): keep the words, drop the brackets.
+    text = re.sub(r"\[([^\]]{1,40})\](?!\()", r"\1", text)
     text = re.sub(r"```.*?```", " ", text, flags=re.S)
     text = re.sub(r"<think>.*?</think>", " ", text, flags=re.S | re.I)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
@@ -558,8 +603,8 @@ class JarvisBrain:
         # Hidden reasoning is disabled through Ollama's ``think: false``; the
         # old "/no_think" soft switch made small Qwen3 models loop.
         messages = [Message(role=Role.SYSTEM, content=system)]
-        keep = (6 if self.lite else self.MAX_HISTORY) if history else 0
-        for role, content in self._history[-keep:] if keep else []:
+        keep = (4 if self.lite else self.MAX_HISTORY) if history else 0
+        for role, content in clean_history(self._history)[-keep:] if keep else []:
             messages.append(
                 Message(
                     role=Role.USER if role == "user" else Role.ASSISTANT,
@@ -595,6 +640,13 @@ class JarvisBrain:
                     temperature=attempt["temperature"],
                     **attempt["options"],
                 )
+                last = next(
+                    (c for r, c in reversed(self._history) if r == "assistant"), ""
+                )
+                if attempt["history"] and similar(
+                    re.sub(r"\[[a-záéíóúñ!¡ ]+\]", "", reply), last
+                ):
+                    raise RuntimeError("repeat: model copied its last reply")
                 break
             except Exception as exc:  # noqa: BLE001
                 if not self._is_loop_error(exc):
@@ -629,11 +681,20 @@ class JarvisBrain:
                 **attempt["options"],
             )
             try:
+                last = next(
+                    (c for r, c in reversed(self._history) if r == "assistant"), ""
+                )
                 for token in tokens:
                     if self.cancel_event is not None and self.cancel_event.is_set():
                         interrupted = True
                         break
                     for sentence in splitter.feed(token):
+                        if (
+                            not spoken
+                            and attempt["history"]
+                            and similar(sentence, last)
+                        ):
+                            raise RuntimeError("repeat: model copied its last reply")
                         spoken.append(sentence)
                         yield sentence
                 break
@@ -674,9 +735,8 @@ class JarvisBrain:
         )
 
     def briefing(self, como: str = "") -> str:
-        reply = self._complete(self._briefing_instruction(como), remember=False)
-        self._remember(None, reply)
-        return reply
+        # Briefings are not stored: small models copy them on every later turn.
+        return self._complete(self._briefing_instruction(como), remember=False)
 
     def stream_briefing(self, como: str = "") -> Iterator[str]:
         yield from self.stream(
@@ -684,7 +744,6 @@ class JarvisBrain:
             remember=False,
             max_tokens=180 if self.lite else 360,
         )
-        self._remember(None, self.last_reply)
 
     def reply(self, user_text: str) -> str:
         return self._complete(user_text)
@@ -725,6 +784,8 @@ __all__ = [
     "Spoken",
     "normalize_mood",
     "clean_for_speech",
+    "clean_history",
+    "similar",
     "fecha_hablada",
     "is_cloud_model",
     "pick_installed_model",

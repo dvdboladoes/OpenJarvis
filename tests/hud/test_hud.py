@@ -615,3 +615,60 @@ def test_system_prompt_is_stable_between_questions() -> None:
     import re as _re
 
     assert not _re.search(r"\b\d{1,2}:\d{2}\b", p1)  # no clock time → cacheable
+
+
+def test_clean_history_drops_parroting() -> None:
+    from openjarvis.hud.brain import clean_history
+
+    brief = (
+        "¡Buenos días! Hoy es lunes y la agenda tiene tareas. ¿En qué puedo ayudarte?"
+    )
+    hist = [
+        ("assistant", brief),  # briefing: no question before it
+        ("user", "hola"),
+        ("assistant", brief),
+        ("user", "¿qué tal?"),
+        ("assistant", "¡Hola! " + brief),  # same reply again
+        ("user", "cuéntame un chiste"),
+        ("assistant", "¿Por qué el libro de mates estaba triste?"),
+    ]
+    out = clean_history(hist)
+    assert out == [
+        ("user", "hola"),
+        ("assistant", brief),
+        ("user", "cuéntame un chiste"),
+        ("assistant", "¿Por qué el libro de mates estaba triste?"),
+    ]
+
+
+def test_stream_retries_when_model_copies_last_reply() -> None:
+    from openjarvis.hud.brain import JarvisBrain
+    from openjarvis.hud.config import HudConfig
+
+    calls: list = []
+
+    class SDK:
+        class config:  # noqa: N801
+            class intelligence:  # noqa: N801
+                default_model = "qwen3:1.7b"
+
+        def _ensure_engine(self) -> None:
+            pass
+
+        def chat_stream(self, messages, **kw):  # type: ignore[no-untyped-def]
+            calls.append(len(messages))
+            if len(calls) == 1:
+                yield from ["Buenos días, hoy es lunes y todo va bien. ", "Más."]
+            else:
+                yield "[alegre] ¡Muy bien, gracias por preguntar!"
+
+    b = JarvisBrain(HudConfig(), memory_path="/nonexistent/m.json")
+    b._history = [
+        ("user", "hola"),
+        ("assistant", "Buenos días, hoy es lunes y todo va bien."),
+    ]  # noqa: SLF001
+    b._sdk = SDK()  # noqa: SLF001
+    b._model = "qwen3:1.7b"  # noqa: SLF001
+    out = [str(x) for x in b.stream_reply("¿qué tal estás?")]
+    assert out == ["¡Muy bien, gracias por preguntar!"]
+    assert calls[0] > calls[1]  # second try without history

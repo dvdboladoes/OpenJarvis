@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 import traceback
 from typing import Any
 
@@ -22,7 +23,13 @@ def run_diagnostics(cfg: HudConfig, console: Any, *, mic: bool = True) -> None:
     console.print("[bold]1. Cerebro (modelo de IA)[/bold]")
     from openjarvis.hud.brain import JarvisBrain, is_cloud_model
 
-    brain = JarvisBrain(cfg)
+    import tempfile
+
+    # Use a throwaway memory so the test question never pollutes the real
+    # conversation history.
+    brain = JarvisBrain(
+        cfg, memory_path=str(Path(tempfile.gettempdir()) / "jarvis_diag_mem.json")
+    )
     try:
         sdk = brain._ensure_sdk()  # noqa: SLF001
         console.print(
