@@ -1207,3 +1207,33 @@ def test_clap_calibration_suggests_a_threshold() -> None:
     assert res["palmadas"] == 3
     assert 0.01 < res["umbral"] < 0.08
     assert calibrate_claps(_noise(3, amp=3).astype(np.float32) / 32768.0)["umbral"] == 0
+
+
+def _far_clap(seed: int = 1) -> "np.ndarray":
+    """A clap from across the room: quiet, with the room's echo after it."""
+    rng = np.random.default_rng(seed)
+    n = int(0.12 * SR)
+    t = np.arange(n)
+    direct = np.exp(-t / (0.004 * SR))
+    echo = 0.35 * np.exp(-t / (0.05 * SR))
+    return rng.normal(0, 1, n) * (direct + echo) * 32768 * 0.012
+
+
+def test_far_away_claps_on_a_quiet_mic() -> None:
+    sig = [
+        _noise(1, amp=3),
+        _far_clap(1),
+        _noise(0.35, amp=3),
+        _far_clap(2),
+        _noise(1, amp=3),
+    ]
+    assert _triggers(np.concatenate(sig), sensitivity=0.6) == 1
+
+
+def test_typing_is_not_a_double_clap() -> None:
+    keys = []
+    for i in range(12):  # sharp keystrokes every ~0.18 s, right next to the mic
+        keys += [_clap(i) * 0.3, _noise(0.15 + 0.03 * (i % 3), amp=3)]
+    assert (
+        _triggers(np.concatenate([_noise(1, amp=3)] + keys + [_noise(1, amp=3)])) == 0
+    )

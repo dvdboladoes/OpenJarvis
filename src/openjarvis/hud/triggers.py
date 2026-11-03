@@ -64,27 +64,36 @@ class ClapDetector:
     ) -> None:
         s = max(0.0, min(1.0, float(sensitivity)))
         self.sample_rate = sample_rate
-        # Minimum 10 ms peak (fraction of full scale).
-        self.peak_threshold = threshold if threshold > 0 else 0.03 - 0.022 * s
+        # Minimum 10 ms peak (fraction of full scale). Low on purpose: a clap
+        # from across the room reaches a laptop mic very quietly.
+        self.peak_threshold = threshold if threshold > 0 else 0.012 - 0.01 * s
         self.contrast = 14.0 - 8.0 * s  # peak vs. background RMS
-        self.attack = 4.0  # peak vs. the window just before: claps are sudden
-        self.decay_ratio = 0.4  # tail RMS must fall below peak * ratio
-        self.tail_windows = 6  # ~60 ms of tail to confirm a transient
+        self.attack = 3.0  # peak vs. the window just before: claps are sudden
+        # Tail RMS (30-80 ms after the peak) must fall below peak * ratio.
+        # Generous, because far away the room's echo lingers.
+        self.decay_ratio = 0.5
+        self.tail_windows = 8
         self.refractory = 0.08
+        # Rhythm: two *isolated* knocks. Quiet before the first and after the
+        # second, so typing (many knocks in a row) never counts as claps.
+        self.quiet_before = 0.35
+        self.quiet_after = 0.3
         self._prev_peak = 0.0
         self.min_gap = min_gap
         self.max_gap = max_gap
         self.cooldown = cooldown
 
         self._t = 0.0  # stream clock, seconds
-        self._background = 0.01
+        self._background = 0.001
         self._candidate: Optional[_Candidate] = None
-        self._claps: Deque[float] = deque(maxlen=4)
+        self._claps: Deque[float] = deque(maxlen=6)
+        self._pending: Optional[float] = None  # second clap awaiting quiet
         self._last_onset = -10.0
         self._last_trigger = -10.0
 
     def reset(self) -> None:
         self._candidate = None
+        self._pending = None
         self._claps.clear()
 
     def process(self, block: Sequence[int] | "object") -> bool:
@@ -106,15 +115,24 @@ class ClapDetector:
     def _step(self, peak: float, rms: float) -> bool:
         triggered = False
 
+        # 0. A double clap is confirmed once the room stays quiet after it.
+        if self._pending is not None and self._t - self._pending >= self.quiet_after:
+            self._pending = None
+            if self._t - self._last_trigger >= self.cooldown:
+                self._last_trigger = self._t
+                self._claps.clear()
+                triggered = True
+
         # 1. Confirm or reject a pending candidate once its tail is collected.
         cand = self._candidate
         if cand is not None:
             cand.tail.append(rms)
             if len(cand.tail) >= self.tail_windows:
-                tail_rms = sum(cand.tail[2:]) / max(1, len(cand.tail) - 2)
+                tail = cand.tail[3:]
+                tail_rms = sum(tail) / max(1, len(tail))
                 self._candidate = None
                 if tail_rms < cand.peak * self.decay_ratio:
-                    triggered = self._register_clap(cand.t)
+                    self._register_clap(cand.t)
             return triggered
 
         # 2. Look for a new onset.
@@ -128,23 +146,27 @@ class ClapDetector:
         if is_onset:
             self._last_onset = self._t
             self._candidate = _Candidate(t=self._t, peak=peak, tail=[])
-            return False
+            return triggered
 
         # 3. Track the background level slowly (only outside transients).
-        self._background = 0.98 * self._background + 0.02 * max(rms, 0.002)
-        return False
+        # The floor is tiny: noise-suppressing laptop mics are almost silent.
+        self._background = 0.98 * self._background + 0.02 * max(rms, 0.00005)
+        return triggered
 
-    def _register_clap(self, t: float) -> bool:
-        if t - self._last_trigger < self.cooldown:
-            return False
-        while self._claps and t - self._claps[0] > self.max_gap:
-            self._claps.popleft()
-        if self._claps and (t - self._claps[-1]) >= self.min_gap:
-            self._claps.clear()
-            self._last_trigger = t
-            return True
+    def _register_clap(self, t: float) -> None:
+        """A sharp knock at *t*: pair it with the previous one if the rhythm fits."""
+        if self._pending is not None:
+            self._pending = None  # a third knock: that was not a double clap
+            self._claps.append(t)
+            return
+        prev = self._claps[-1] if self._claps else None
+        before = self._claps[-2] if len(self._claps) >= 2 else None
         self._claps.append(t)
-        return False
+        if prev is None or not self.min_gap <= t - prev <= self.max_gap:
+            return
+        if before is not None and prev - before < self.quiet_before:
+            return  # part of a longer series (typing, knocking…)
+        self._pending = t
 
 
 def calibrate_claps(samples: "object", sample_rate: int = SAMPLE_RATE) -> dict:
@@ -178,8 +200,11 @@ def calibrate_claps(samples: "object", sample_rate: int = SAMPLE_RATE) -> dict:
             i += 1
     if not found:
         return {"palmadas": 0, "umbral": 0.0}
+    # A third of the claps it heard: claps from further away (quieter) still
+    # count, but never below what the room's noise allows.
     claps = sorted(found)[-3:]
-    return {"palmadas": len(found), "umbral": round(0.45 * float(np.median(claps)), 4)}
+    umbral = max(0.3 * float(np.median(claps)), 10 * noise)
+    return {"palmadas": len(found), "umbral": round(umbral, 5)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
