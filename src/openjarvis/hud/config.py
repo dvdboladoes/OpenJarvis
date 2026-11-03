@@ -55,6 +55,9 @@ motor = "navegador"
 # "auto" elige el mejor que tu PC mueve con soltura (large-v3-turbo con
 # tarjeta NVIDIA, medium sin ella). Opciones: small, medium, large-v3-turbo
 modelo = "auto"
+# Segundos callado antes de enviar la frase (solo con "navegador").
+# Menos = responde antes, pero si haces pausas largas te puede cortar.
+silencio = 0.6
 
 [cerebro]
 # Vacío = el modelo local por defecto (Ollama). Para un Jarvis mucho más
@@ -78,6 +81,9 @@ contexto = 0
 usar_gpu = true
 max_tokens = 500
 temperatura = 0.6
+# false = Claude contesta sin "pensar" antes (unos 1,5 s más rápido).
+# true = razona antes de hablar: más lento, útil para preguntas difíciles.
+pensar = false
 
 [briefing]
 # Fuentes conectadas con `jarvis connect gdrive` (Gmail, Calendar, Tasks)
@@ -139,6 +145,7 @@ class HudConfig:
 
     motor_oido: str = "navegador"
     modelo_oido: str = "auto"
+    silencio: float = 0.6
 
     modelo: str = ""
     motor_cerebro: str = "auto"
@@ -147,6 +154,7 @@ class HudConfig:
     usar_gpu: bool = True
     max_tokens: int = 500
     temperatura: float = 0.6
+    pensar: bool = False
 
     fuentes: List[str] = field(
         default_factory=lambda: ["gcalendar", "gmail", "google_tasks"]
@@ -232,6 +240,7 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
 
     d.motor_oido = str(oido.get("motor", d.motor_oido) or "navegador").lower()
     d.modelo_oido = str(oido.get("modelo", d.modelo_oido) or "auto")
+    d.silencio = _clamp(oido.get("silencio", d.silencio), 0.3, 2.0, 0.6)
 
     d.modelo = str(cerebro.get("modelo", d.modelo) or "")
     d.motor_cerebro = str(cerebro.get("motor", d.motor_cerebro) or "auto")
@@ -240,6 +249,7 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.usar_gpu = bool(cerebro.get("usar_gpu", d.usar_gpu))
     d.max_tokens = int(_clamp(cerebro.get("max_tokens", d.max_tokens), 64, 4096, 500))
     d.temperatura = _clamp(cerebro.get("temperatura", d.temperatura), 0.0, 1.5, 0.6)
+    d.pensar = bool(cerebro.get("pensar", d.pensar))
 
     fuentes = briefing.get("fuentes", d.fuentes)
     d.fuentes = [str(s) for s in fuentes] if isinstance(fuentes, list) else d.fuentes

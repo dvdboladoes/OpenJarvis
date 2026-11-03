@@ -100,6 +100,22 @@ Por defecto usa `edge`, voces neuronales de Microsoft gratuitas
 voz como la de las películas, usa ElevenLabs: pon `motor = "elevenlabs"`, el
 ID de la voz en `voz`, y define la variable de entorno `ELEVENLABS_API_KEY`.
 
+### Velocidad de respuesta
+
+Debajo de los subtítulos verás `⏱ total · cerebro · voz`: cuánto tardó la
+primera palabra desde que dejaste de hablar, y en qué fase. Dos ajustes lo
+cambian:
+
+```toml
+[oido]
+silencio = 0.6   # segundos callado antes de enviar la frase (0.3 a 2)
+
+[cerebro]
+pensar = false   # true = Claude razona antes de hablar (~1,5 s más lento)
+```
+
+Si Jarvis te corta cuando haces una pausa, sube `silencio` a `0.8`.
+
 ## Si algo falla
 
 - **No reacciona a las palmadas:** sube `sensibilidad_palmadas` (por ejemplo

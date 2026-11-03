@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10, <3.14"
 resolution-markers = [
     "python_full_version >= '3.13' and platform_machine == 's390x' and sys_platform == 'linux'",
@@ -2055,7 +2055,7 @@ dependencies = [
     { name = "av" },
     { name = "ctranslate2" },
     { name = "huggingface-hub" },
-    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine == 's390x') or (python_full_version < '3.11' and sys_platform != 'darwin') or (platform_machine != 's390x' and sys_platform == 'darwin')" },
+    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (platform_machine != 's390x' and sys_platform == 'darwin')" },
     { name = "onnxruntime", version = "1.24.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and platform_machine == 's390x') or (python_full_version >= '3.11' and sys_platform != 'darwin')" },
     { name = "tokenizers" },
     { name = "tqdm" },
@@ -5294,7 +5294,7 @@ desktop = [
     { name = "fastapi" },
     { name = "faster-whisper" },
     { name = "numpy" },
-    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine != 'x86_64') or (python_full_version < '3.11' and sys_platform != 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin')" },
+    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (platform_machine == 'x86_64' and sys_platform == 'darwin')" },
     { name = "pydantic" },
     { name = "python-multipart" },
     { name = "sounddevice" },
@@ -5343,6 +5343,7 @@ gpu-metrics = [
     { name = "pynvml" },
 ]
 hud = [
+    { name = "av" },
     { name = "edge-tts" },
     { name = "numpy" },
     { name = "openwakeword", marker = "python_full_version < '3.12' or sys_platform != 'linux'" },
@@ -5429,7 +5430,7 @@ speech = [
     { name = "av" },
     { name = "faster-whisper" },
     { name = "numpy" },
-    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_machine != 'x86_64') or (python_full_version < '3.11' and sys_platform != 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin')" },
+    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (platform_machine == 'x86_64' and sys_platform == 'darwin')" },
     { name = "sounddevice" },
     { name = "soundfile" },
 ]
@@ -5462,6 +5463,7 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'inference-cloud'", specifier = ">=0.30" },
     { name = "apple-fm-sdk", marker = "sys_platform == 'darwin' and extra == 'afm'", specifier = ">=0.2.1" },
     { name = "av", marker = "extra == 'desktop'", specifier = ">=11,<19" },
+    { name = "av", marker = "extra == 'hud'", specifier = ">=11,<19" },
     { name = "av", marker = "extra == 'speech'", specifier = ">=11,<19" },
     { name = "click", specifier = ">=8" },
     { name = "colbert-ai", marker = "extra == 'memory-colbert'", specifier = ">=0.2" },
@@ -5748,14 +5750,14 @@ name = "openwakeword"
 version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and sys_platform == 'darwin') or (python_full_version != '3.11.*' and sys_platform == 'linux') or (python_full_version < '3.11' and sys_platform != 'darwin' and sys_platform != 'linux') or (platform_machine != 's390x' and sys_platform == 'darwin')" },
-    { name = "onnxruntime", version = "1.24.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and platform_machine == 's390x' and sys_platform == 'darwin') or (python_full_version == '3.11.*' and sys_platform == 'linux') or (python_full_version >= '3.11' and sys_platform != 'darwin' and sys_platform != 'linux')" },
+    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (python_full_version >= '3.12' and sys_platform == 'linux') or (platform_machine != 's390x' and sys_platform == 'darwin')" },
+    { name = "onnxruntime", version = "1.24.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version == '3.11.*' and platform_machine == 's390x') or (python_full_version >= '3.12' and platform_machine == 's390x' and sys_platform == 'darwin') or (python_full_version == '3.11.*' and sys_platform == 'linux') or (python_full_version >= '3.11' and sys_platform != 'darwin' and sys_platform != 'linux')" },
     { name = "requests", version = "2.32.5", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 's390x'" },
     { name = "requests", version = "2.34.2", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 's390x'" },
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform != 'linux') or (python_full_version == '3.11.*' and sys_platform == 'linux')" },
+    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (python_full_version >= '3.12' and sys_platform != 'linux')" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "scipy", version = "1.17.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform != 'linux') or (python_full_version == '3.11.*' and sys_platform == 'linux')" },
+    { name = "scipy", version = "1.17.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*' or (python_full_version >= '3.12' and sys_platform != 'linux')" },
     { name = "tflite-runtime", marker = "sys_platform == 'linux'" },
     { name = "tqdm" },
 ]

@@ -230,6 +230,7 @@ class JarvisAssistant:
             "continua": self.continuous,
             "activacion": self.listener.detectors if self.listener else [],
             "voz": self.cfg.motor_voz,
+            "silencio": self.cfg.silencio,
         }
         try:
             if self.browser_ears:
@@ -244,6 +245,9 @@ class JarvisAssistant:
         try:
             self.speaker._resolve()  # noqa: SLF001 - pre-load the TTS backend
             status["voz"] = self.speaker.backend_name
+            threading.Thread(
+                target=self.speaker.warm_up, name="jarvis-voice-warmup", daemon=True
+            ).start()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -705,7 +709,8 @@ class JarvisAssistant:
                 if item is done or isinstance(item, Exception):
                     audio_q.put(item)
                     return
-                audio_q.put((item, self.speaker.synthesize(item)))
+                # A stream: playback starts with the first chunk of audio.
+                audio_q.put((item, self.speaker.synthesize_streaming(item)))
 
         threading.Thread(target=produce, name="jarvis-llm", daemon=True).start()
         threading.Thread(target=synthesize, name="jarvis-tts", daemon=True).start()
@@ -726,6 +731,9 @@ class JarvisAssistant:
                 failed = True
                 break
             sentence, audio = item
+            ready = getattr(audio, "ready", None)
+            if ready is not None:
+                ready.wait()  # time the first sound, not the request
             if "voz" not in marks:
                 marks["voz"] = time.monotonic()
                 self._report_timing(t_start, marks)

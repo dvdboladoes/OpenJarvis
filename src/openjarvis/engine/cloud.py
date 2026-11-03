@@ -441,7 +441,18 @@ class CloudEngine(InferenceEngine):
             try:
                 import anthropic
 
-                self._anthropic_client = anthropic.Anthropic()
+                # Keep the HTTPS connection alive between questions: the SDK
+                # default drops it after 5 s idle, so every voice question
+                # paid a fresh TLS handshake.
+                self._anthropic_client = anthropic.Anthropic(
+                    http_client=anthropic.DefaultHttpxClient(
+                        limits=httpx.Limits(
+                            max_connections=100,
+                            max_keepalive_connections=20,
+                            keepalive_expiry=120.0,
+                        )
+                    )
+                )
             except ImportError:
                 pass
         gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get(
@@ -789,6 +800,9 @@ class CloudEngine(InferenceEngine):
             create_kwargs["extra_body"] = {"temperature": temperature}
         if system_text:
             create_kwargs["system"] = system_text
+        for key in ("thinking", "output_config"):
+            if kwargs.get(key):
+                create_kwargs.setdefault("extra_body", {})[key] = kwargs[key]
 
         # Convert and pass tools in Anthropic format
         raw_tools = kwargs.pop("tools", None)
@@ -1453,23 +1467,33 @@ class CloudEngine(InferenceEngine):
     ) -> AsyncIterator[str]:
         if self._anthropic_client is None:
             raise EngineConnectionError("Anthropic client not available")
-        system_text = ""
-        chat_msgs: List[Dict[str, Any]] = []
-        for m in messages:
-            if m.role.value == "system":
-                system_text = m.content
-            else:
-                chat_msgs.append({"role": m.role.value, "content": m.content})
+        # Shared conversion, so images (camera / screen) reach the model.
+        system_text, chat_msgs = self._prepare_anthropic_messages(messages)
         create_kwargs: Dict[str, Any] = {
             "model": model,
             "messages": chat_msgs,
             "max_tokens": max_tokens,
         }
+        extra_body: Dict[str, Any] = {}
         if not model.startswith(_ANTHROPIC_FIXED_SAMPLING_PREFIXES):
             # Anthropic SDK v1 moved legacy sampling parameters to extra_body.
-            create_kwargs["extra_body"] = {"temperature": temperature}
+            extra_body["temperature"] = temperature
+        # Optional speed controls (``thinking``, ``output_config``), e.g. the
+        # voice HUD turns thinking off so the first words come sooner.
+        for key in ("thinking", "output_config"):
+            if kwargs.get(key):
+                extra_body[key] = kwargs[key]
+        if extra_body:
+            create_kwargs["extra_body"] = extra_body
         if system_text:
-            create_kwargs["system"] = system_text
+            # Prompt caching: the system prompt repeats on every question.
+            create_kwargs["system"] = [
+                {
+                    "type": "text",
+                    "text": system_text,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
         with self._anthropic_client.messages.stream(**create_kwargs) as stream:
             for text in stream.text_stream:
                 yield text

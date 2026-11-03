@@ -346,6 +346,7 @@ def test_assistant_speaks_while_streaming() -> None:
     a.hub.publish = lambda kind, **d: events.append((kind, d))  # type: ignore[method-assign]
     played: list = []
     a.speaker.synthesize = lambda text: text.encode()  # type: ignore[method-assign]
+    a.speaker.synthesize_streaming = a.speaker.synthesize  # type: ignore[method-assign]
     a.speaker.play = lambda audio, on_level=None: played.append(audio.decode())  # type: ignore[method-assign]
 
     assert a._say_stream(a.brain.stream_reply("hola"), fallback=lambda: "x")  # noqa: SLF001
@@ -468,7 +469,11 @@ def test_lite_mode_for_local_models() -> None:
         HudConfig(modelo="claude-sonnet-5-5"), memory_path="/nonexistent/m.json"
     )
     cloud._model = "claude-sonnet-5-5"  # noqa: SLF001
-    assert not cloud.lite and cloud._engine_options() == {}  # noqa: SLF001
+    assert not cloud.lite
+    # Cloud models get speed options only, never Ollama's num_ctx & co.
+    assert cloud._engine_options() == {  # noqa: SLF001
+        "output_config": {"effort": "low"}
+    }
 
     full = JarvisBrain(
         HudConfig(modo_cerebro="completo"), memory_path="/nonexistent/m.json"
@@ -489,6 +494,7 @@ def test_interrupt_frees_a_busy_session() -> None:
         HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
     )
     a.speaker.synthesize = lambda text, mood="": b"x"  # type: ignore[method-assign]
+    a.speaker.synthesize_streaming = a.speaker.synthesize  # type: ignore[method-assign]
     a.speaker.play = lambda audio, on_level=None: None  # type: ignore[method-assign]
     gate = _t.Event()
 
@@ -746,6 +752,7 @@ def test_continuous_mode_answers_each_utterance() -> None:
 
     a.brain.stream_reply = fake_reply  # type: ignore[method-assign]
     a.speaker.synthesize = lambda text, mood="": b"x"  # type: ignore[method-assign]
+    a.speaker.synthesize_streaming = a.speaker.synthesize  # type: ignore[method-assign]
     a.speaker.play = lambda audio, on_level=None: said.append("play")  # type: ignore[method-assign]
     a._on_utterance(_np.zeros(16000, dtype=_np.float32))  # noqa: SLF001
     for _ in range(50):
@@ -995,3 +1002,168 @@ def test_browser_listener_toggles_page_listening() -> None:
     bl.resume()
     assert events == [("listen", True), ("listen", False), ("listen", True)]
     assert "navegador" in bl.detectors
+
+
+def test_claude_speed_options() -> None:
+    from openjarvis.hud.brain import claude_speed_options
+
+    fast = {"output_config": {"effort": "low"}, "thinking": {"type": "disabled"}}
+    assert claude_speed_options("claude-haiku-5-5") == fast
+    assert claude_speed_options("claude-opus-5") == fast
+    # These reject thinking "disabled": only lower the effort.
+    for model in ("claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"):
+        assert claude_speed_options(model) == {"output_config": {"effort": "low"}}
+    # pensar = true, older Claude and other providers: untouched.
+    assert claude_speed_options("claude-haiku-5-5", pensar=True) == {}
+    assert claude_speed_options("claude-haiku-4-5") == {}
+    assert claude_speed_options("gpt-5") == {}
+
+
+def test_speed_settings_in_config() -> None:
+    cfg = parse_hud_config({})
+    assert cfg.pensar is False and cfg.silencio == 0.6
+    cfg = parse_hud_config({"cerebro": {"pensar": True}, "oido": {"silencio": 5}})
+    assert cfg.pensar is True and cfg.silencio == 2.0
+    data = tomllib.loads(DEFAULT_TEMPLATE)
+    assert data["cerebro"]["pensar"] is False
+    assert data["oido"]["silencio"] == 0.6
+
+
+def _anthropic_engine():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from openjarvis.engine.cloud import CloudEngine
+
+    class _Stream:
+        text_stream = ("ok",)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    client = MagicMock()
+    client.messages.stream.return_value = _Stream()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="ok")],
+        usage=SimpleNamespace(input_tokens=2, output_tokens=1),
+        model="claude-haiku-5-5",
+        stop_reason="end_turn",
+    )
+    engine = CloudEngine.__new__(CloudEngine)
+    engine._anthropic_client = client  # noqa: SLF001
+    return engine, client
+
+
+def test_claude_stream_sends_images_cache_and_speed_options() -> None:
+    import asyncio
+
+    from openjarvis.core.types import Message, Role
+
+    engine, client = _anthropic_engine()
+    messages = [
+        Message(role=Role.SYSTEM, content="Eres JARVIS."),
+        Message(role=Role.USER, content="¿Qué ves?", images=["/9j/AAAA"]),
+    ]
+
+    async def run() -> list:
+        return [
+            t
+            async for t in engine._stream_anthropic(  # noqa: SLF001
+                messages,
+                model="claude-haiku-5-5",
+                temperature=0.6,
+                max_tokens=50,
+                thinking={"type": "disabled"},
+                output_config={"effort": "low"},
+            )
+        ]
+
+    assert asyncio.run(run()) == ["ok"]
+    sent = client.messages.stream.call_args.kwargs
+    # The camera / screen image reaches Claude (it was dropped when streaming).
+    blocks = sent["messages"][0]["content"]
+    assert blocks[0]["type"] == "image"
+    assert blocks[0]["source"]["media_type"] == "image/jpeg"
+    # The system prompt is cached between questions.
+    assert sent["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert sent["extra_body"] == {
+        "thinking": {"type": "disabled"},
+        "output_config": {"effort": "low"},
+    }
+
+
+def test_claude_generate_passes_speed_options() -> None:
+    from openjarvis.core.types import Message, Role
+
+    engine, client = _anthropic_engine()
+    engine._generate_anthropic(  # noqa: SLF001
+        [Message(role=Role.USER, content="hola")],
+        model="claude-haiku-5-5",
+        temperature=0.6,
+        max_tokens=50,
+        thinking={"type": "disabled"},
+    )
+    sent = client.messages.create.call_args.kwargs
+    assert sent["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+def test_audio_stream_keeps_order_and_signals_ready() -> None:
+    from openjarvis.hud.voice import AudioStream
+
+    stream = AudioStream()
+    assert not stream.ready.is_set()
+    stream.put(np.zeros(4, dtype=np.float32), 24000)
+    assert stream.ready.is_set()
+    stream.put(np.ones(2, dtype=np.float32), 24000)
+    stream.close()
+    assert [len(c) for c in stream] == [4, 2]
+
+
+def test_streaming_voice_falls_back_to_full_audio() -> None:
+    from openjarvis.hud.config import HudConfig
+    from openjarvis.hud.voice import Speaker
+
+    speaker = Speaker(HudConfig())
+    speaker._backend = type("Fake", (), {"backend_id": "kokoro"})()  # noqa: SLF001
+    speaker.synthesize = lambda text, mood="": b"wav"  # type: ignore[method-assign]
+    assert speaker.synthesize_streaming("Hola") == b"wav"
+
+
+def test_mp3_decoder_decodes_chunks_as_they_arrive() -> None:
+    av = pytest.importorskip("av")
+    import io
+
+    from openjarvis.hud.voice import _Mp3Decoder
+
+    # One second of a 440 Hz tone, encoded to MP3 like edge-tts sends it.
+    buf = io.BytesIO()
+    with av.open(buf, "w", format="mp3") as container:
+        try:
+            stream = container.add_stream("mp3", rate=24000)
+        except Exception:  # noqa: BLE001
+            pytest.skip("PyAV without an MP3 encoder")
+        stream.layout = "mono"
+        tone = (0.3 * np.sin(np.arange(24000) * 2 * np.pi * 440 / 24000)).astype(
+            np.float32
+        )
+        frame = av.AudioFrame.from_ndarray(
+            tone.reshape(1, -1), format="flt", layout="mono"
+        )
+        frame.sample_rate = 24000
+        for packet in stream.encode(frame):
+            container.mux(packet)
+        for packet in stream.encode(None):
+            container.mux(packet)
+    data = buf.getvalue()
+
+    decoder = _Mp3Decoder()
+    first = decoder.feed(data[: len(data) // 2])
+    assert first, "audio should be playable before the whole file arrives"
+    chunks = first + decoder.feed(data[len(data) // 2 :]) + decoder.flush()
+    total = sum(len(pcm) for pcm, _ in chunks)
+    assert {rate for _, rate in chunks} == {24000}
+    assert 23000 < total < 26500
+    assert all(pcm.dtype == np.float32 for pcm, _ in chunks)

@@ -689,7 +689,7 @@ body.mini .tools { gap: 6px; }
 
   // ── ears: Edge / Chrome speech recognition (instant, accurate) ─
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null, wantListen = false, recRunning = false, recErrors = 0, recSent = false, recTimer = 0;
+  let rec = null, wantListen = false, recRunning = false, recErrors = 0, recSent = false, recTimer = 0, recSilence = 600;
   function recStart() {
     if (!SR) { post("stt_unsupported"); return; }
     wantListen = true;
@@ -711,9 +711,9 @@ body.mini .tools { gap: 6px; }
         if (state === "reposo") { document.body.dataset.state = "escuchando"; $("state").textContent = "ESCUCHANDO"; }
         subtitles(t, "user"); mic = Math.max(mic, .55 + Math.random() * .35);
         clearTimeout(recTimer);
-        // Send as soon as you stop talking (~0.7 s) instead of waiting for the
-        // browser to close the sentence, which can take 1-2 s more.
-        if (anyFinal && !inter.trim()) recSend(t); else recTimer = setTimeout(() => recSend(t), 700);
+        // Send as soon as you stop talking ([oido] silencio, 0.6 s by default)
+        // instead of waiting for the browser to close the sentence (1-2 s more).
+        if (anyFinal && !inter.trim()) recSend(t); else recTimer = setTimeout(() => recSend(t), recSilence);
       };
     }
     recSent = false;
@@ -747,7 +747,7 @@ body.mini .tools { gap: 6px; }
       case "notes": renderNotes(ev.items || []); break;
       case "voices": voices = ev.items || []; actual = ev.actual || {}; renderVoices(); break;
       case "mic": micOn = !!ev.on; if (!micOn) recStop(); $("sw-mic").classList.toggle("on", micOn); $("mic").classList.toggle("off", !micOn); break;
-      case "status": continua = !!ev.continua; if (state === "reposo" && continua) $("state").textContent = "A LA ESCUCHA"; tickerLines.unshift(ev.motor ? `Cerebro: ${ev.motor}` : "Cerebro sin conexión"); if (!ev.motor) toast("El cerebro de IA no responde. Revisa Ollama o tu clave de Claude."); break;
+      case "status": continua = !!ev.continua; if (ev.silencio) recSilence = Math.round(ev.silencio * 1000); if (state === "reposo" && continua) $("state").textContent = "A LA ESCUCHA"; tickerLines.unshift(ev.motor ? `Cerebro: ${ev.motor}` : "Cerebro sin conexión"); if (!ev.motor) toast("El cerebro de IA no responde. Revisa Ollama o tu clave de Claude."); break;
       case "alarm": sfx.alarm(); document.body.classList.remove("alarm"); void document.body.offsetWidth; document.body.classList.add("alarm"); toast(`⏰ Temporizador de ${ev.label} terminado`); break;
       case "notice": toast(ev.text); break;
       case "camera": ev.on ? camOn() : camOff(); break;

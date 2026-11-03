@@ -50,6 +50,66 @@ def prosody_for(mood: str, base_speed: float = 1.0) -> tuple[float, str, str]:
     )
 
 
+class AudioStream:
+    """Speech that can start playing while it is still being synthesised."""
+
+    def __init__(self) -> None:
+        import queue
+
+        self._q: "queue.Queue[Any]" = queue.Queue()
+        self.ready = threading.Event()  # first audio (or the end) arrived
+        self.sample_rate = 24000
+
+    def put(self, pcm: Any, sample_rate: int) -> None:
+        self.sample_rate = sample_rate
+        self._q.put(pcm)
+        self.ready.set()
+
+    def close(self) -> None:
+        self._q.put(None)
+        self.ready.set()
+
+    def __iter__(self) -> Any:
+        while (pcm := self._q.get()) is not None:
+            yield pcm
+
+
+class _Mp3Decoder:
+    """Incremental MP3 to float32 PCM (PyAV), for audio arriving in chunks."""
+
+    def __init__(self) -> None:
+        import av
+
+        self._codec = av.CodecContext.create("mp3", "r")
+
+    def _pcm(self, frames: Any) -> list:
+        import numpy as np
+
+        out = []
+        for frame in frames:
+            pcm = frame.to_ndarray()
+            if pcm.dtype.kind == "i":
+                pcm = pcm / 32768.0
+            if pcm.ndim > 1 and frame.format.is_planar:
+                pcm = pcm.mean(axis=0)  # planar: one row per channel
+            pcm = np.asarray(pcm, dtype=np.float32).reshape(-1)
+            out.append((pcm, frame.sample_rate))
+        return out
+
+    def feed(self, data: Optional[bytes]) -> list:
+        """Decode a chunk; ``None`` flushes what the parser still holds."""
+        out = []
+        for packet in self._codec.parse(data):
+            try:
+                out += self._pcm(self._codec.decode(packet))
+            except Exception:  # noqa: BLE001 - e.g. an ID3 tag: skip it
+                continue
+        return out
+
+    def flush(self) -> list:
+        return self.feed(None) + self._pcm(self._codec.decode(None))
+
+
 class Speaker:
     """Text-to-speech with the configured backend and graceful fallback."""
 
@@ -124,11 +184,137 @@ class Speaker:
         logger.warning("No hay motor de voz disponible (instala: pip install edge-tts)")
         return None
 
+    def warm_up(self) -> None:
+        """Load the voice engine and audio libraries before the first reply.
+
+        Importing edge-tts and opening its first connection took ~10 s on a
+        laptop; done at start-up, the first answer no longer waits for it.
+        """
+        import sounddevice  # noqa: F401
+        import soundfile  # noqa: F401
+
+        audio = self.synthesize_streaming("Listo.")
+        if isinstance(audio, AudioStream):
+            for _ in audio:  # wait for it to arrive, without playing it
+                pass
+
+    def synthesize_streaming(self, text: str, mood: str = "") -> Any:
+        """Start synthesising *text* and return an :class:`AudioStream` at once.
+
+        edge-tts sends the MP3 in chunks: decoding them as they arrive lets
+        Jarvis start talking ~0.4-1 s sooner than waiting for the whole
+        sentence. Other voice engines (or a missing PyAV) fall back to
+        :meth:`synthesize` and return the complete audio as bytes.
+        """
+        backend = self._resolve()
+        if getattr(backend, "backend_id", "") != "edge":
+            return self.synthesize(text, mood)
+        try:
+            decoder = _Mp3Decoder()
+        except Exception:  # noqa: BLE001 - PyAV not installed
+            return self.synthesize(text, mood)
+
+        mood = mood or getattr(text, "mood", "") or "neutral"
+        speed, pitch, volume = prosody_for(mood, self.cfg.velocidad)
+        voice = self._voice_for(backend)
+        stream = AudioStream()
+
+        async def _pump() -> None:
+            import edge_tts
+
+            from openjarvis.speech.edge_tts_backend import (
+                DEFAULT_VOICE,
+                _rate_from_speed,
+            )
+
+            communicate = edge_tts.Communicate(
+                str(text),
+                voice or DEFAULT_VOICE,
+                rate=_rate_from_speed(speed),
+                pitch=pitch,
+                volume=volume,
+            )
+            async for chunk in communicate.stream():
+                if chunk.get("type") == "audio":
+                    for pcm, rate in decoder.feed(chunk["data"]):
+                        stream.put(pcm, rate)
+            for pcm, rate in decoder.flush():
+                stream.put(pcm, rate)
+
+        def _run() -> None:
+            import asyncio
+
+            try:
+                asyncio.run(_pump())
+            except Exception as exc:  # noqa: BLE001
+                if stream.ready.is_set():
+                    logger.warning("La voz se cortó: %s", exc)
+                else:
+                    # Nothing played yet: use the normal path, which retries
+                    # with the default voice and other engines.
+                    self._put_bytes(stream, self.synthesize(text, mood))
+            finally:
+                stream.close()
+
+        threading.Thread(target=_run, name="jarvis-tts-stream", daemon=True).start()
+        return stream
+
+    @staticmethod
+    def _put_bytes(stream: AudioStream, audio: Optional[bytes]) -> None:
+        if not audio:
+            return
+        import soundfile as sf
+
+        data, sr = sf.read(io.BytesIO(audio), dtype="float32", always_2d=False)
+        if getattr(data, "ndim", 1) > 1:
+            data = data.mean(axis=1)
+        stream.put(data, sr)
+
+    def _play_stream(self, stream: AudioStream, on_level: Optional[LevelFn]) -> None:
+        """Play an :class:`AudioStream` chunk by chunk as it arrives."""
+        import numpy as np
+        import sounddevice as sd
+
+        self._stop.clear()
+        out = None
+        peak = 0.05
+        try:
+            for pcm in stream:
+                if self._stop.is_set():
+                    break
+                if out is None:
+                    out = sd.OutputStream(
+                        samplerate=stream.sample_rate, channels=1, dtype="float32"
+                    )
+                    out.start()
+                hop = max(1, int(stream.sample_rate * 0.05))
+                for i in range(0, len(pcm), hop):
+                    if self._stop.is_set():
+                        break
+                    block = pcm[i : i + hop]
+                    if on_level is not None and len(block):
+                        rms = float(np.sqrt(np.mean(block**2)))
+                        peak = max(peak * 0.995, rms)
+                        on_level(min(1.0, rms / peak))
+                    out.write(block.reshape(-1, 1))  # blocks: keeps real time
+        finally:
+            if out is not None:
+                if self._stop.is_set():
+                    out.abort()
+                else:
+                    out.stop()  # let the last buffer play out
+                out.close()
+            if on_level is not None:
+                on_level(0.0)
+
     def stop(self) -> None:
         self._stop.set()
 
-    def play(self, audio: bytes, on_level: Optional[LevelFn] = None) -> None:
+    def play(self, audio: Any, on_level: Optional[LevelFn] = None) -> None:
         """Play audio, streaming a 0–1 loudness envelope to *on_level*."""
+        if isinstance(audio, AudioStream):
+            self._play_stream(audio, on_level)
+            return
         import numpy as np
         import sounddevice as sd
         import soundfile as sf

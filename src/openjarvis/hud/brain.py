@@ -178,6 +178,42 @@ def is_cloud_model(model: Optional[str]) -> bool:
     return bool(m) and m.startswith(_CLOUD_PREFIXES)
 
 
+# Claude models that accept an ``effort`` level. Recent ones think before
+# answering by default, which delays the first spoken word by ~1.5 s.
+_CLAUDE_EFFORT = (
+    "claude-haiku-5",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-fable",
+    "claude-mythos",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+)
+# These reject ``thinking: disabled``; low effort is the only lever there.
+_CLAUDE_ALWAYS_THINK = (
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-fable",
+    "claude-mythos",
+)
+
+
+def claude_speed_options(model: Optional[str], pensar: bool = False) -> dict:
+    """Engine options that make Claude start talking sooner.
+
+    For a voice assistant the wait before the first word matters most:
+    without thinking, Claude Haiku 5.5 starts answering in ~0.5 s instead of
+    ~2 s. ``pensar = true`` in jarvis.toml keeps the model's own reasoning.
+    """
+    m = (model or "").strip().lower()
+    if pensar or not m.startswith(_CLAUDE_EFFORT):
+        return {}
+    opts: dict = {"output_config": {"effort": "low"}}
+    if not m.startswith(_CLAUDE_ALWAYS_THINK):
+        opts["thinking"] = {"type": "disabled"}
+    return opts
+
+
 _CLOUD_KEYS = (
     ("claude", "ANTHROPIC_API_KEY", "anthropic"),
     ("gpt-", "OPENAI_API_KEY", "openai"),
@@ -631,8 +667,9 @@ class JarvisBrain:
         machine the extra KV cache alone pushes the model into virtual memory
         and a reply can take minutes.
         """
-        if is_cloud_model(self._model or self.cfg.modelo):
-            return {}
+        model = self._model or self.cfg.modelo
+        if is_cloud_model(model):
+            return claude_speed_options(model, self.cfg.pensar)
         return {
             "num_ctx": int(self.cfg.contexto or (3072 if self.lite else 8192)),
             # Sampling recommended for Qwen3 in non-thinking mode, plus a
@@ -698,6 +735,14 @@ class JarvisBrain:
 
         model = self.resolve_model()
         if is_cloud_model(model):
+            # Import the SDK, open the HTTPS connection and fill the prompt
+            # cache now, so the first question doesn't pay for it. One output
+            # token: the cost is negligible.
+            _, messages = self._messages("hola")
+            for _ in self._ensure_sdk().chat_stream(
+                messages, model=model, max_tokens=1, **self._engine_options()
+            ):
+                pass
             return
         self._ensure_sdk().chat(
             [Message(role=Role.USER, content="hola")],
@@ -888,8 +933,11 @@ class JarvisBrain:
                 )
             )
         messages.append(Message(role=Role.USER, content=question, images=[image_b64]))
-        options = self._engine_options()
-        if options:
+        if is_cloud_model(model):
+            options = claude_speed_options(model, self.cfg.pensar)
+        else:
+            options = self._engine_options()
+        if options and not is_cloud_model(model):
             options["num_ctx"] = max(int(options.get("num_ctx", 0)), 4096)
         splitter = SentenceSplitter()
         spoken: List[str] = []
