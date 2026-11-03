@@ -1237,3 +1237,20 @@ def test_typing_is_not_a_double_clap() -> None:
     assert (
         _triggers(np.concatenate([_noise(1, amp=3)] + keys + [_noise(1, amp=3)])) == 0
     )
+
+
+def _thud(seed: int = 1) -> "np.ndarray":
+    """A dull knock (table, footstep): sharp, but with no treble."""
+    n = int(0.06 * SR)
+    t = np.arange(n) / SR
+    return np.sin(2 * np.pi * 120 * t) * np.exp(-t / 0.008) * 20000
+
+
+def test_dull_knocks_are_not_claps() -> None:
+    sig = [_noise(1, amp=3), _thud(), _noise(0.4, amp=3), _thud(), _noise(1, amp=3)]
+    assert _triggers(np.concatenate(sig)) == 0
+
+
+def test_a_bang_and_a_faint_click_are_not_a_double_clap() -> None:
+    sig = [_noise(1, amp=3), _clap(1), _noise(0.4, amp=3), _clap(2) * 0.05]
+    assert _triggers(np.concatenate(sig + [_noise(1, amp=3)])) == 0

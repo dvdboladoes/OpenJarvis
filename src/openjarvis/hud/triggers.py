@@ -78,6 +78,10 @@ class ClapDetector:
         # second, so typing (many knocks in a row) never counts as claps.
         self.quiet_before = 0.35
         self.quiet_after = 0.3
+        self.min_bright = 0.6  # see process()
+        self.max_mismatch = 5.0  # the two claps must be of similar strength
+        self._bright = 1.0
+        self._peaks: Deque[float] = deque(maxlen=6)
         self._prev_peak = 0.0
         self.min_gap = min_gap
         self.max_gap = max_gap
@@ -107,6 +111,11 @@ class ClapDetector:
             win = samples[start : start + _WINDOW]
             peak = float(np.max(np.abs(win)))
             rms = float(np.sqrt(np.mean(win * win)))
+            # Brightness: a clap is a crack full of treble; thuds, footsteps,
+            # voices and music beats are much darker. ~1.4 for white noise,
+            # ~0.4 at 1 kHz, ~0.07 for a deep hum.
+            diff = np.diff(win)
+            self._bright = float(np.sqrt(np.mean(diff * diff))) / (rms + 1e-9)
             if self._step(peak, rms):
                 triggered = True
             self._t += dt
@@ -132,7 +141,7 @@ class ClapDetector:
                 tail_rms = sum(tail) / max(1, len(tail))
                 self._candidate = None
                 if tail_rms < cand.peak * self.decay_ratio:
-                    self._register_clap(cand.t)
+                    self._register_clap(cand.t, cand.peak)
             return triggered
 
         # 2. Look for a new onset.
@@ -141,6 +150,7 @@ class ClapDetector:
             peak >= self.peak_threshold
             and peak >= self._background * self.contrast
             and peak >= max(prev, 1e-4) * self.attack
+            and self._bright >= self.min_bright
             and (self._t - self._last_onset) >= self.refractory
         )
         if is_onset:
@@ -153,19 +163,24 @@ class ClapDetector:
         self._background = 0.98 * self._background + 0.02 * max(rms, 0.00005)
         return triggered
 
-    def _register_clap(self, t: float) -> None:
+    def _register_clap(self, t: float, peak: float = 1.0) -> None:
         """A sharp knock at *t*: pair it with the previous one if the rhythm fits."""
         if self._pending is not None:
             self._pending = None  # a third knock: that was not a double clap
             self._claps.append(t)
+            self._peaks.append(peak)
             return
         prev = self._claps[-1] if self._claps else None
+        prev_peak = self._peaks[-1] if self._peaks else peak
         before = self._claps[-2] if len(self._claps) >= 2 else None
         self._claps.append(t)
+        self._peaks.append(peak)
         if prev is None or not self.min_gap <= t - prev <= self.max_gap:
             return
         if before is not None and prev - before < self.quiet_before:
             return  # part of a longer series (typing, knocking…)
+        if max(peak, prev_peak) > self.max_mismatch * min(peak, prev_peak):
+            return  # two unrelated noises (a loud bang, then a faint click)
         self._pending = t
 
 

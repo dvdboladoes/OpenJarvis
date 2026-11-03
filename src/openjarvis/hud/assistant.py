@@ -476,7 +476,10 @@ class JarvisAssistant:
         if not self._spoke:
             self._spoke = True
             if self.listener is not None and self.browser_ears:
-                self._publish_barge()
+                if self.cfg.interrumpir:
+                    self._publish_barge()
+                else:
+                    self.listener.pause()
 
     def _publish_barge(self) -> None:
         self.hub.publish("listen", on=self._mic_enabled, barge=True)
@@ -491,12 +494,17 @@ class JarvisAssistant:
             self.listener.resume()
         self._session.release()
         if self._claps is not None and self._mic_enabled:
-            self._claps.resume()
+            # Wait for the room's echo of Jarvis' voice to die out first.
+            threading.Timer(1.2, self._resume_claps).start()
         after, self._after = self._after, ""
         if after == "background":
             threading.Thread(target=self.enter_background, daemon=True).start()
         elif after == "quit":
             threading.Thread(target=self._quit_by_voice, daemon=True).start()
+
+    def _resume_claps(self) -> None:
+        if self._claps is not None and self._mic_enabled and not self._session.locked():
+            self._claps.resume()
 
     def _quit_by_voice(self) -> None:
         if self._begin():
@@ -903,6 +911,9 @@ class JarvisAssistant:
                 if item is AWAIT_REPLY:
                     audio_q.put((item, None))
                     continue
+                # Tell the page what is about to be said, so it can recognise
+                # Jarvis' own echo (and not mistake it for you).
+                self.hub.publish("ahead", text=str(item))
                 # A stream: playback starts with the first chunk of audio.
                 audio_q.put((item, self.speaker.synthesize_streaming(item)))
 
@@ -944,6 +955,7 @@ class JarvisAssistant:
                 marks["voz"] = time.monotonic()
                 self._report_timing(t_start, marks)
             said.append(str(sentence))
+            self._said_text, self._said_at = " ".join(said), time.monotonic()
             self._set_mood(getattr(sentence, "mood", "neutral"))
             if self._state != "hablando":
                 self._set_state("hablando", "")
@@ -1250,13 +1262,15 @@ class JarvisAssistant:
 
     def _is_own_echo(self, text: str) -> bool:
         """The microphone caught the tail of what Jarvis just said."""
-        if time.monotonic() - self._said_at > 2.5 or not self._said_text:
+        if time.monotonic() - self._said_at > 4.0 or not self._said_text:
             return False
         heard = [w for w in _fold_simple(text).split() if len(w) > 2]
-        said = set(_fold_simple(self._said_text).split())
+        said = _fold_simple(self._said_text).split()
         if not heard:
             return False
-        return sum(w in said for w in heard) / len(heard) >= 0.7
+        known = set(said) | {w[:4] for w in said if len(w) > 3}
+        echo = sum(w in known or w[:4] in known for w in heard)
+        return echo / len(heard) >= 0.6
 
     def _remote_audio(self, mp3: bytes) -> None:
         """Send Jarvis' voice to remote devices (the Chromebook) too."""

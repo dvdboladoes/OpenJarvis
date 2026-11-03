@@ -48,6 +48,7 @@ voz = "en-AU-WilliamMultilingualNeural"  # natural y rápida; cámbiala en Ajust
 velocidad = 1.05
 tono = 2                          # Tono de la voz en Hz (-10 grave … 15 agudo)
 acuse = true                      # Dice «Mmm…» al instante mientras piensa
+interrumpir = true                # Si le hablas mientras habla, se calla
 idioma_escucha = "es"             # Idioma que entiende al escucharte
 
 [oido]
@@ -155,6 +156,7 @@ class HudConfig:
     velocidad: float = 1.05
     tono: int = 2
     acuse: bool = True
+    interrumpir: bool = True
     idioma_escucha: str = "es"
 
     motor_oido: str = "navegador"
@@ -262,6 +264,7 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.velocidad = _clamp(voz.get("velocidad", d.velocidad), 0.5, 2.0, 1.0)
     d.tono = int(_clamp(voz.get("tono", d.tono), -20, 20, 2))
     d.acuse = bool(voz.get("acuse", d.acuse))
+    d.interrumpir = bool(voz.get("interrumpir", d.interrumpir))
     d.idioma_escucha = str(voz.get("idioma_escucha", d.idioma_escucha) or "")
 
     d.motor_oido = str(oido.get("motor", d.motor_oido) or "navegador").lower()
@@ -377,6 +380,14 @@ SETTINGS: List[Dict[str, Any]] = [
         "attr": "acuse",
         "tipo": "bool",
         "etiqueta": "Respuesta instantánea: dice «Mmm…» mientras prepara la respuesta",
+    },
+    {
+        "grupo": "Voz",
+        "seccion": "voz",
+        "clave": "interrumpir",
+        "attr": "interrumpir",
+        "tipo": "bool",
+        "etiqueta": "Callarse si le hablas mientras habla (quítalo si se oye solo)",
     },
     {
         "grupo": "Oído",

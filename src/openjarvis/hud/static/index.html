@@ -597,11 +597,12 @@ body.bg .sleep { display: grid; }
   function userStart(words) {
     const known = knownWords(); let run = 0;
     for (let i = 0; i < words.length; i++) {
-      const w = words[i]; if (w.length <= 2 && !STOP_WORDS.test(w)) continue;
+      // Short words ("de", "los", "pon") are too easy to mishear: neutral.
+      const w = words[i]; if (w.length <= 3 && !STOP_WORDS.test(w)) continue;
       const mine = !known.has(w) && !known.has(w.slice(0, 4));
       if (mine && STOP_WORDS.test(w) && words.length - i <= 3) return i;  // "¡para!", "espera"
       run = mine ? run + 1 : 0;
-      if (run >= 2) { let j = i; while (j > 0 && (words[j - 1].length <= 2 || !known.has(words[j - 1]))) j--; return j; }
+      if (run >= 2) { let j = i; while (j > 0 && (words[j - 1].length <= 3 || !known.has(words[j - 1]))) j--; return j; }
     }
     return -1;
   }
@@ -790,8 +791,9 @@ body.bg .sleep { display: grid; }
       case "wake": burst = 1; three.shock(); setTimeout(() => three.shock(), 170); sfx.wake(); show("home"); break;
       case "level": if (ev.source === "voz") voice = Math.max(voice, ev.value); else mic = Math.max(mic, ev.value); break;
       case "mood": mood = ev.mood || "neutral"; paint(); break;
-      case "partial": if (ev.role === "jarvis") { showJarvis(ev.text); spokenByJarvis = ev.text; } else setYou(ev.text); break;
-      case "message": if (ev.role === "jarvis") { showJarvis(ev.text); spokenByJarvis = ev.text; } else { setYou(ev.text); jarvisText = ""; $("jarvis").innerHTML = ""; spokenByJarvis = ""; } chatAppend(ev.role, ev.text); break;
+      case "partial": if (ev.role === "jarvis") { showJarvis(ev.text); spokenByJarvis += " " + ev.text; } else setYou(ev.text); break;
+      case "ahead": spokenByJarvis += " " + ev.text; break;
+      case "message": if (ev.role === "jarvis") { showJarvis(ev.text); spokenByJarvis += " " + ev.text; } else { setYou(ev.text); jarvisText = ""; $("jarvis").innerHTML = ""; spokenByJarvis = ""; } chatAppend(ev.role, ev.text); break;
       case "confirm": $("confirm-q").textContent = ev.pregunta || ""; $("confirm").classList.toggle("on", !!ev.pregunta); break;
       case "snapshot": if (ev.tiempo) { const m = ev.tiempo.match(/[+-]?\d+\s*°C/); $("w-t").textContent = m ? m[0].replace(/\s/g, "") : ""; $("w-c").textContent = " " + ev.tiempo.split(",")[0]; $("weather").classList.remove("hidden"); } break;
       case "system": { const set = (k, v, t) => { $("g-" + k).style.width = Math.max(0, Math.min(100, v || 0)) + "%"; $("v-" + k).textContent = t; };
