@@ -15,7 +15,8 @@ from openjarvis.core.paths import get_config_dir
 STARTUP_NAME = "Jarvis.vbs"
 
 
-def _browser_candidates() -> List[str]:
+def _browser_candidates(prefer: str = "auto") -> List[str]:
+    """Installed Edge/Chrome executables; *prefer* ("chrome"/"edge") goes first."""
     found: List[str] = []
     if sys.platform == "win32":
         roots = [
@@ -42,6 +43,10 @@ def _browser_candidates() -> List[str]:
         path = shutil.which(name)
         if path:
             found.append(path)
+    want = (prefer or "auto").lower()
+    if want in ("chrome", "edge"):
+        key = "chrome" if want == "chrome" else "edge"
+        found.sort(key=lambda exe: key not in Path(exe).name.lower())
     return found
 
 
@@ -73,12 +78,20 @@ def _grant_media(profile: Path, url: str) -> None:
         pass
 
 
-def open_window(url: str, *, fullscreen: bool = False) -> bool:
-    """Open *url* in a frameless Edge/Chrome app window (fallback: default browser)."""
-    profile = get_config_dir() / "hud-window"
-    profile.mkdir(parents=True, exist_ok=True)
-    _grant_media(profile, url)
-    for exe in _browser_candidates():
+def open_window(url: str, *, fullscreen: bool = False, browser: str = "auto") -> bool:
+    """Open *url* in a frameless Edge/Chrome app window (fallback: default browser).
+
+    *browser* is ``[interfaz] navegador``: "chrome", "edge" or "auto" (Edge
+    first, as it comes with Windows). Each browser gets its own small Jarvis
+    profile, separate from the user's normal one.
+    """
+    for exe in _browser_candidates(browser):
+        name = (
+            "hud-window-chrome" if "chrome" in Path(exe).name.lower() else "hud-window"
+        )
+        profile = get_config_dir() / name
+        profile.mkdir(parents=True, exist_ok=True)
+        _grant_media(profile, url)
         args = [
             exe,
             f"--app={url}",

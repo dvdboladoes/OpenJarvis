@@ -1315,7 +1315,8 @@ class JarvisAssistant:
         if not window.bring_to_front() and self.cfg.abrir_ventana:
             from openjarvis.hud.launcher import open_window
 
-            open_window(self.server.url)  # it was closed with the X
+            # it was closed with the X
+            open_window(self.server.url, browser=self.cfg.navegador)
 
     def exit_background(self, source: str = "interfaz") -> None:
         if not self._background:

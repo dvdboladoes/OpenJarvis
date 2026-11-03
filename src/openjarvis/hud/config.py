@@ -125,6 +125,7 @@ silencios_para_dormir = 2
 puerto = 8765
 abrir_ventana = true
 pantalla_completa = false
+navegador = "auto"       # Ventana de Jarvis: "chrome", "edge" o "auto" (Edge)
 
 [remoto]
 # Usar Jarvis desde otro dispositivo de tu red (por ejemplo el Chromebook):
@@ -189,6 +190,7 @@ class HudConfig:
     puerto: int = 8765
     abrir_ventana: bool = True
     pantalla_completa: bool = False
+    navegador: str = "auto"
 
     acceso_remoto: bool = False
     pin: str = ""
@@ -298,6 +300,9 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.puerto = int(_clamp(ui.get("puerto", d.puerto), 1024, 65535, 8765))
     d.abrir_ventana = bool(ui.get("abrir_ventana", d.abrir_ventana))
     d.pantalla_completa = bool(ui.get("pantalla_completa", d.pantalla_completa))
+    d.navegador = str(ui.get("navegador", d.navegador) or "auto").lower()
+    if d.navegador not in ("auto", "chrome", "edge"):
+        d.navegador = "auto"
     d.acceso_remoto = bool(remoto.get("acceso", d.acceso_remoto))
     d.pin = str(remoto.get("pin", d.pin) or "")
     return d
@@ -426,6 +431,20 @@ SETTINGS: List[Dict[str, Any]] = [
         "attr": "briefing_al_despertar",
         "tipo": "bool",
         "etiqueta": "Briefing (agenda, correo, tiempo) al despertar",
+    },
+    {
+        "grupo": "Ventana",
+        "seccion": "interfaz",
+        "clave": "navegador",
+        "attr": "navegador",
+        "tipo": "opcion",
+        "etiqueta": "Navegador de la ventana de Jarvis",
+        "opciones": [
+            ["auto", "Automático (Edge)"],
+            ["chrome", "Google Chrome"],
+            ["edge", "Microsoft Edge"],
+        ],
+        "reinicio": True,
     },
     {
         "grupo": "Ordenador",

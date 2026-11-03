@@ -184,7 +184,11 @@ def hud(
     if cfg.abrir_ventana and not no_window:
         from openjarvis.hud.launcher import open_window
 
-        open_window(url, fullscreen=fullscreen or cfg.pantalla_completa)
+        open_window(
+            url,
+            fullscreen=fullscreen or cfg.pantalla_completa,
+            browser=cfg.navegador,
+        )
 
     tray = None
     if assistant is not None:
