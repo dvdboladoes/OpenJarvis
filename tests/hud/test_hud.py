@@ -179,7 +179,11 @@ def test_server_serves_page_events_and_actions() -> None:
                 for raw in resp:
                     line = raw.decode().strip()
                     if line.startswith("data: "):
-                        got.update(json.loads(line[6:]))
+                        event = json.loads(line[6:])
+                        if event["type"] == "hello":
+                            assert event["local"] is True
+                            continue
+                        got.update(event)
                         return
 
         t = threading.Thread(target=_read, daemon=True)
@@ -402,7 +406,10 @@ def test_prosody_follows_mood() -> None:
     slow, low, _ = prosody_for("empatico", 1.0)
     assert fast > 1.0 > slow
     assert pitch.startswith("+") and low.startswith("-")
-    assert prosody_for("desconocido") == (1.0, "+0Hz", "+0%")
+    # Unknown moods sound like "neutral", which is slightly upbeat on purpose.
+    assert prosody_for("desconocido") == prosody_for("neutral") == (1.02, "+2Hz", "+0%")
+    # The user's base pitch ([voz] tono) shifts every mood.
+    assert prosody_for("neutral", 1.0, 3)[1] == "+5Hz"
 
 
 def test_skill_parsers() -> None:

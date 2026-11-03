@@ -55,6 +55,11 @@ aporta tu opinión con criterio, matiza, discrepa con respeto cuando toque y \
 haz preguntas de vuelta que hagan avanzar la charla. Ahí puedes extenderte lo \
 que haga falta, siempre en lenguaje hablado.
 - Charla casual: respuestas cortas y con gracia (una a tres frases).
+- Suenas humano, no leído: frases cortas con pausas naturales (comas), \
+alguna interjección ("¡anda!", "vale", "genial", "mmm, a ver") y una risa \
+suave cuando algo tiene gracia ("ja, ja"). Por defecto, tono alegre y con \
+energía, como quien disfruta ayudando.
+- Ve al grano: la primera frase ya responde. Nada de preámbulos.
 - Usa "{tratamiento}" con naturalidad, no en cada frase.
 - Recuerdas lo hablado (también de conversaciones anteriores) y lo retomas.
 - Nunca suenes a robot: nada de "como modelo de lenguaje", nada de \
@@ -483,6 +488,10 @@ class SentenceSplitter:
             # Wait for a longer chunk if this one is tiny and more may follow.
             if len(sentence) < self.min_chars and m.end() >= len(self._buf):
                 break
+            # "34." at the very end of the buffer may be "34.059": wait for the
+            # next token before deciding it ends a sentence.
+            if m.group(1) and m.group(2) == "":
+                break
             self._buf = self._buf[m.end() :]
             cleaned = clean_for_speech(self._take_moods(sentence))
             if cleaned:
@@ -609,6 +618,10 @@ class JarvisBrain:
         the configured model when it exists, otherwise the first installed one.
         """
         if self._model:
+            return self._model
+        if is_cloud_model(self.cfg.modelo):
+            # No need to load the OpenJarvis engines just to read the name.
+            self._model = self.cfg.modelo
             return self._model
         sdk = self._ensure_sdk()
         sdk._ensure_engine()  # noqa: SLF001

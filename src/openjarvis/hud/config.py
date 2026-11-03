@@ -39,11 +39,14 @@ palmadas = true          # Dos palmadas seguidas lo despiertan
 palabra_clave = true     # Decir "Hey Jarvis" lo despierta
 sensibilidad_palmadas = 0.35  # 0.1 = solo palmadas muy fuertes, 0.9 = muy sensible
 sensibilidad_palabra = 0.5    # 0.1 = estricto, 0.9 = se activa con facilidad
+# Al despertar: false = saluda al momento; true = briefing con agenda y correo
+briefing_al_despertar = false
 
 [voz]
 motor = "edge"                    # "edge" (gratis), "elevenlabs", "openai_tts"...
-voz = "es-ES-AlvaroNeural"        # edge: es-ES-AlvaroNeural, es-ES-ElviraNeural...
+voz = "en-US-AndrewMultilingualNeural"  # la más natural; cámbiala en Ajustes
 velocidad = 1.05
+tono = 2                          # Tono de la voz en Hz (-10 grave … 15 agudo)
 idioma_escucha = "es"             # Idioma que entiende al escucharte
 
 [oido]
@@ -120,6 +123,12 @@ silencios_para_dormir = 2
 puerto = 8765
 abrir_ventana = true
 pantalla_completa = false
+
+[remoto]
+# Usar Jarvis desde otro dispositivo de tu red (por ejemplo el Chromebook):
+# abre en él la dirección que muestra Ajustes → Remoto y escribe el PIN.
+acceso = false
+pin = ""
 """
 
 
@@ -137,10 +146,12 @@ class HudConfig:
     palabra_clave: bool = True
     sensibilidad_palmadas: float = 0.35
     sensibilidad_palabra: float = 0.5
+    briefing_al_despertar: bool = False
 
     motor_voz: str = "edge"
-    voz: str = "es-ES-AlvaroNeural"
+    voz: str = "en-US-AndrewMultilingualNeural"
     velocidad: float = 1.05
+    tono: int = 2
     idioma_escucha: str = "es"
 
     motor_oido: str = "navegador"
@@ -173,6 +184,9 @@ class HudConfig:
     puerto: int = 8765
     abrir_ventana: bool = True
     pantalla_completa: bool = False
+
+    acceso_remoto: bool = False
+    pin: str = ""
 
     path: Optional[Path] = None
 
@@ -215,6 +229,7 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     pc = data.get("pc", {}) or {}
     vision = data.get("vision", {}) or {}
     ui = data.get("interfaz", {}) or {}
+    remoto = data.get("remoto", {}) or {}
 
     d.nombre = str(usuario.get("nombre", d.nombre) or "")
     d.tratamiento = str(usuario.get("tratamiento", d.tratamiento) or "")
@@ -232,10 +247,14 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.sensibilidad_palabra = _clamp(
         activ.get("sensibilidad_palabra", d.sensibilidad_palabra), 0.05, 0.95, 0.5
     )
+    d.briefing_al_despertar = bool(
+        activ.get("briefing_al_despertar", d.briefing_al_despertar)
+    )
 
     d.motor_voz = str(voz.get("motor", d.motor_voz) or "edge")
     d.voz = str(voz.get("voz", d.voz) or "")
     d.velocidad = _clamp(voz.get("velocidad", d.velocidad), 0.5, 2.0, 1.0)
+    d.tono = int(_clamp(voz.get("tono", d.tono), -20, 20, 2))
     d.idioma_escucha = str(voz.get("idioma_escucha", d.idioma_escucha) or "")
 
     d.motor_oido = str(oido.get("motor", d.motor_oido) or "navegador").lower()
@@ -269,7 +288,159 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.puerto = int(_clamp(ui.get("puerto", d.puerto), 1024, 65535, 8765))
     d.abrir_ventana = bool(ui.get("abrir_ventana", d.abrir_ventana))
     d.pantalla_completa = bool(ui.get("pantalla_completa", d.pantalla_completa))
+    d.acceso_remoto = bool(remoto.get("acceso", d.acceso_remoto))
+    d.pin = str(remoto.get("pin", d.pin) or "")
     return d
+
+
+# What the Ajustes screen can change: (section, key, attribute, kind, label,
+# options). Kinds: texto, bool, rango (min, max, step), opcion (choices).
+SETTINGS: List[Dict[str, Any]] = [
+    {
+        "grupo": "Tú",
+        "seccion": "usuario",
+        "clave": "nombre",
+        "attr": "nombre",
+        "tipo": "texto",
+        "etiqueta": "Tu nombre",
+    },
+    {
+        "grupo": "Tú",
+        "seccion": "usuario",
+        "clave": "tratamiento",
+        "attr": "tratamiento",
+        "tipo": "texto",
+        "etiqueta": "Cómo te llama Jarvis",
+    },
+    {
+        "grupo": "Tú",
+        "seccion": "usuario",
+        "clave": "ciudad",
+        "attr": "ciudad",
+        "tipo": "texto",
+        "etiqueta": "Tu ciudad (para el tiempo)",
+    },
+    {
+        "grupo": "Cerebro",
+        "seccion": "cerebro",
+        "clave": "modelo",
+        "attr": "modelo",
+        "tipo": "opcion",
+        "etiqueta": "Modelo de IA",
+        "opciones": [
+            ["claude-haiku-5-5", "Claude Haiku 5.5 · el más rápido"],
+            ["claude-sonnet-5-5", "Claude Sonnet 5.5 · más listo"],
+            ["claude-opus-5-5", "Claude Opus 5.5 · el más listo (lento)"],
+        ],
+    },
+    {
+        "grupo": "Cerebro",
+        "seccion": "cerebro",
+        "clave": "pensar",
+        "attr": "pensar",
+        "tipo": "bool",
+        "etiqueta": "Pensar antes de responder (~1,5 s más lento)",
+    },
+    {
+        "grupo": "Voz",
+        "seccion": "voz",
+        "clave": "velocidad",
+        "attr": "velocidad",
+        "tipo": "rango",
+        "etiqueta": "Velocidad",
+        "min": 0.8,
+        "max": 1.4,
+        "paso": 0.01,
+    },
+    {
+        "grupo": "Voz",
+        "seccion": "voz",
+        "clave": "tono",
+        "attr": "tono",
+        "tipo": "rango",
+        "etiqueta": "Tono",
+        "min": -10,
+        "max": 15,
+        "paso": 1,
+    },
+    {
+        "grupo": "Oído",
+        "seccion": "oido",
+        "clave": "silencio",
+        "attr": "silencio",
+        "tipo": "rango",
+        "etiqueta": "Silencio antes de responder (s)",
+        "min": 0.3,
+        "max": 1.5,
+        "paso": 0.05,
+    },
+    {
+        "grupo": "Activación",
+        "seccion": "activacion",
+        "clave": "palmadas",
+        "attr": "palmadas",
+        "tipo": "bool",
+        "etiqueta": "Despertar con dos palmadas (en segundo plano)",
+    },
+    {
+        "grupo": "Activación",
+        "seccion": "activacion",
+        "clave": "sensibilidad_palmadas",
+        "attr": "sensibilidad_palmadas",
+        "tipo": "rango",
+        "etiqueta": "Sensibilidad de las palmadas",
+        "min": 0.05,
+        "max": 0.95,
+        "paso": 0.05,
+    },
+    {
+        "grupo": "Activación",
+        "seccion": "activacion",
+        "clave": "briefing_al_despertar",
+        "attr": "briefing_al_despertar",
+        "tipo": "bool",
+        "etiqueta": "Briefing (agenda, correo, tiempo) al despertar",
+    },
+    {
+        "grupo": "Ordenador",
+        "seccion": "pc",
+        "clave": "control",
+        "attr": "control_pc",
+        "tipo": "bool",
+        "etiqueta": "Dejar que Jarvis controle el ordenador",
+    },
+    {
+        "grupo": "Remoto",
+        "seccion": "remoto",
+        "clave": "acceso",
+        "attr": "acceso_remoto",
+        "tipo": "bool",
+        "etiqueta": "Permitir el acceso desde otro dispositivo",
+        "reinicio": True,
+    },
+    {
+        "grupo": "Remoto",
+        "seccion": "remoto",
+        "clave": "pin",
+        "attr": "pin",
+        "tipo": "texto",
+        "etiqueta": "PIN de acceso (mínimo 4 cifras)",
+    },
+]
+
+
+def coerce_setting(spec: Dict[str, Any], value: Any) -> Any:
+    """Validate a value coming from the Ajustes screen."""
+    kind = spec["tipo"]
+    if kind == "bool":
+        return bool(value)
+    if kind == "rango":
+        num = _clamp(value, spec["min"], spec["max"], spec["min"])
+        return int(num) if float(spec["paso"]).is_integer() else round(num, 2)
+    text = str(value or "").strip()[:200]
+    if kind == "opcion" and text not in [o[0] for o in spec["opciones"]]:
+        raise ValueError(f"Opción no válida: {text}")
+    return text
 
 
 def template_sections() -> Dict[str, str]:
@@ -369,5 +540,7 @@ __all__ = [
     "ensure_config_file",
     "load_hud_config",
     "parse_hud_config",
+    "SETTINGS",
+    "coerce_setting",
     "save_config_value",
 ]

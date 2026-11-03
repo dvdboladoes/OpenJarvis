@@ -45,21 +45,51 @@ def _browser_candidates() -> List[str]:
     return found
 
 
+def _grant_media(profile: Path, url: str) -> None:
+    """Allow microphone and camera for the Jarvis page in its own profile.
+
+    Saves a permission prompt on every start. Best effort: the browser
+    rewrites this file while it runs, so it only applies on a fresh start.
+    """
+    import json
+
+    origin = url.rstrip("/")
+    prefs_path = profile / "Default" / "Preferences"
+    try:
+        prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        prefs = {}
+    exceptions = (
+        prefs.setdefault("profile", {})
+        .setdefault("content_settings", {})
+        .setdefault("exceptions", {})
+    )
+    for kind in ("media_stream_mic", "media_stream_camera"):
+        exceptions.setdefault(kind, {})[f"{origin},*"] = {"setting": 1}
+    try:
+        prefs_path.parent.mkdir(parents=True, exist_ok=True)
+        prefs_path.write_text(json.dumps(prefs), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def open_window(url: str, *, fullscreen: bool = False) -> bool:
     """Open *url* in a frameless Edge/Chrome app window (fallback: default browser)."""
     profile = get_config_dir() / "hud-window"
     profile.mkdir(parents=True, exist_ok=True)
+    _grant_media(profile, url)
     for exe in _browser_candidates():
         args = [
             exe,
             f"--app={url}",
             f"--user-data-dir={profile}",
             "--autoplay-policy=no-user-gesture-required",
-            # Dedicated Jarvis profile: allow its own camera preview without a
-            # permission prompt (the page only runs on 127.0.0.1).
-            "--use-fake-ui-for-media-stream",
             "--no-first-run",
-            "--disable-features=Translate",
+            "--disable-features=Translate,CalculateNativeWinOcclusion",
+            # Keep listening for "Jarvis, enciéndete" while hidden.
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "--disable-backgrounding-occluded-windows",
             "--window-size=1600,900",
         ]
         if fullscreen:
@@ -101,8 +131,8 @@ def _pythonw() -> str:
 
 
 def startup_script() -> str:
-    """VBScript that starts ``jarvis hud`` silently (no console window)."""
-    cmd = f'"{_pythonw()}" -m openjarvis.cli --quiet hud'
+    """VBScript that starts Jarvis hidden in the background at log-on."""
+    cmd = f'"{_pythonw()}" -m openjarvis.hud --segundo-plano'
     escaped = cmd.replace('"', '""')
     return (
         "' Arranca Jarvis al iniciar Windows (jarvis hud --autoarranque)\r\n"
@@ -135,4 +165,186 @@ def remove_autostart() -> bool:
     return False
 
 
-__all__ = ["install_autostart", "open_window", "remove_autostart", "startup_script"]
+def autostart_installed() -> bool:
+    folder = _startup_dir()
+    return bool(folder and (folder / STARTUP_NAME).exists())
+
+
+# ── helpers for the app (no terminal for the user) ──────────────────────────
+
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def run_hidden(args: List[str], **kwargs: object) -> subprocess.CompletedProcess:
+    """Run a command without flashing a console window."""
+    return subprocess.run(  # noqa: S603
+        args,
+        capture_output=True,
+        text=True,
+        creationflags=_NO_WINDOW,
+        encoding="utf-8",
+        errors="replace",
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def repo_root() -> Path:
+    """The git checkout Jarvis runs from (…/OpenJarvis/src)."""
+    import openjarvis
+
+    return Path(openjarvis.__file__).resolve().parents[2]
+
+
+def app_dir() -> Path:
+    """Where Jarvis.exe and its icon live (…/OpenJarvis)."""
+    return repo_root().parent
+
+
+def _shortcut(lnk: Path, target: str, args: str, icon: Path, workdir: Path) -> None:
+    def q(text: object) -> str:
+        return str(text).replace("'", "''")
+
+    script = (
+        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut("
+        f"'{q(lnk)}'); $s.TargetPath = '{q(target)}'; $s.Arguments = '{q(args)}'; "
+        f"$s.IconLocation = '{q(icon)}'; $s.WorkingDirectory = '{q(workdir)}'; "
+        "$s.Description = 'J.A.R.V.I.S.'; $s.Save()"
+    )
+    res = run_hidden(["powershell", "-NoProfile", "-Command", script], timeout=30)
+    if res.returncode != 0:
+        raise RuntimeError(f"No se pudo crear el acceso directo: {res.stderr[-300:]}")
+
+
+def install_app() -> List[Path]:
+    """Desktop + Start Menu shortcuts called «Jarvis», with its own icon.
+
+    They open ``Jarvis.exe`` when it has been built, or Python directly
+    otherwise — either way, no terminal for the user.
+    """
+    if sys.platform != "win32":
+        raise RuntimeError("Los accesos directos solo están disponibles en Windows.")
+    from openjarvis.hud.tray import save_ico
+
+    folder = app_dir()
+    icon = save_ico(folder / "jarvis.ico")
+    exe = folder / "Jarvis.exe"
+    if exe.exists():
+        target, args = str(exe), ""
+    else:
+        target, args = _pythonw(), "-m openjarvis.hud"
+    # The Desktop may live in OneDrive ("Escritorio"): ask Windows where it is.
+    desk = run_hidden(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "[Environment]::GetFolderPath('Desktop')",
+        ],
+        timeout=20,
+    ).stdout.strip()
+    places = [
+        Path(desk) if desk else Path.home() / "Desktop",
+        Path(os.environ.get("APPDATA", ""))
+        / "Microsoft"
+        / "Windows"
+        / "Start Menu"
+        / "Programs",
+    ]
+    made = []
+    for place in places:
+        if place.exists():
+            lnk = place / "Jarvis.lnk"
+            _shortcut(lnk, target, args, icon, repo_root())
+            made.append(lnk)
+    return made
+
+
+def find_uv() -> Optional[str]:
+    found = shutil.which("uv")
+    if found:
+        return found
+    for cand in (
+        Path.home() / ".local" / "bin" / "uv.exe",
+        Path.home() / ".cargo" / "bin" / "uv.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "uv" / "uv.exe",
+    ):
+        if cand.exists():
+            return str(cand)
+    return None
+
+
+SYNC_ARGS = [
+    "sync",
+    "--extra",
+    "desktop",
+    "--extra",
+    "hud",
+    "--extra",
+    "inference-cloud",
+    "--group",
+    "desktop-native",
+]
+
+
+def schedule_update_and_restart() -> None:
+    """Pull the latest code, then (once this process has exited) sync and restart.
+
+    ``uv sync`` cannot replace files this Python process has open, so a small
+    hidden PowerShell waits for us to exit before installing and relaunching.
+    """
+    root = repo_root()
+    pull = run_hidden(["git", "pull", "--ff-only"], cwd=root, timeout=120)
+    if pull.returncode != 0:
+        raise RuntimeError(
+            f"No se pudo descargar la actualización: {pull.stderr[-300:]}"
+        )
+    uv = find_uv() or "uv"
+    sync = " ".join(f"'{a}'" for a in SYNC_ARGS)
+    log = get_config_dir() / "jarvis-update.log"
+    script = (
+        f"Start-Sleep -Seconds 3; Set-Location -LiteralPath '{root}'; "
+        f"& '{uv}' {sync} *> '{log}'; "
+        f"Start-Process -FilePath '{_pythonw()}' "
+        "-ArgumentList '-m','openjarvis.hud'"
+    )
+    subprocess.Popen(  # noqa: S603
+        ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+        creationflags=_NO_WINDOW | getattr(subprocess, "DETACHED_PROCESS", 0),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def local_addresses() -> List[str]:
+    """This PC's addresses on the local network (for the Chromebook)."""
+    import socket
+
+    ips: List[str] = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.168.1.1", 80))  # picks the LAN interface; sends nothing
+            ips.append(s.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = str(info[4][0])
+            if ip not in ips and not ip.startswith("127."):
+                ips.append(ip)
+    except OSError:
+        pass
+    return ips
+
+
+__all__ = [
+    "autostart_installed",
+    "find_uv",
+    "install_autostart",
+    "local_addresses",
+    "open_window",
+    "remove_autostart",
+    "repo_root",
+    "run_hidden",
+    "schedule_update_and_restart",
+    "startup_script",
+]

@@ -6,7 +6,7 @@ import io
 import logging
 import threading
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from openjarvis.hud.config import HudConfig
 
@@ -17,15 +17,16 @@ LevelFn = Callable[[float], None]
 
 # How each emotion colours the voice: (speed multiplier, pitch Hz, volume %).
 # Small shifts on purpose — enough to hear the mood, never cartoonish.
+# Slightly upbeat even when neutral: flat delivery is what sounds robotic.
 MOOD_PROSODY = {
-    "neutral": (1.0, 0, 0),
-    "alegre": (1.06, 6, 4),
-    "entusiasta": (1.12, 11, 10),
-    "bromista": (1.05, 5, 4),
-    "sereno": (0.96, -2, -2),
-    "serio": (0.94, -6, 0),
-    "empatico": (0.92, -3, -6),
-    "sorprendido": (1.08, 12, 6),
+    "neutral": (1.02, 2, 0),
+    "alegre": (1.07, 7, 4),
+    "entusiasta": (1.12, 12, 10),
+    "bromista": (1.06, 6, 4),
+    "sereno": (0.98, 0, -2),
+    "serio": (0.96, -4, 0),
+    "empatico": (0.94, -2, -6),
+    "sorprendido": (1.09, 13, 6),
 }
 
 # ElevenLabs v3 audio tags for each mood (only used with an eleven_v3 model).
@@ -40,12 +41,14 @@ MOOD_ELEVEN_TAGS = {
 }
 
 
-def prosody_for(mood: str, base_speed: float = 1.0) -> tuple[float, str, str]:
+def prosody_for(
+    mood: str, base_speed: float = 1.0, base_pitch: int = 0
+) -> tuple[float, str, str]:
     """Return ``(speed, pitch, volume)`` for edge-tts given an emotion."""
     speed, pitch, volume = MOOD_PROSODY.get(mood or "neutral", MOOD_PROSODY["neutral"])
     return (
         round(base_speed * speed, 3),
-        f"{pitch:+d}Hz",
+        f"{pitch + int(base_pitch):+d}Hz",
         f"{volume:+d}%",
     )
 
@@ -118,6 +121,12 @@ class Speaker:
         self._backend: Any = None
         self._attempted: set[str] = set()
         self._stop = threading.Event()
+        # Called with each sentence's MP3 (edge-tts): lets a remote device
+        # (the Chromebook) play Jarvis' voice too.
+        self.on_mp3: Optional[Callable[[bytes], None]] = None
+        # Fixed phrases (greetings, "Hecho, señor") synthesised in advance,
+        # so they play instantly: {(text, mood): ([pcm chunks], rate, mp3)}.
+        self._cache: Dict[Tuple[str, str], Tuple[list, int, bytes]] = {}
 
     @property
     def backend_name(self) -> str:
@@ -159,7 +168,9 @@ class Speaker:
                     kwargs["voice_id"] = voice
                 say = str(text)
                 if backend_id == "edge":
-                    speed, pitch, volume = prosody_for(mood, self.cfg.velocidad)
+                    speed, pitch, volume = prosody_for(
+                        mood, self.cfg.velocidad, self.cfg.tono
+                    )
                     kwargs.update(speed=speed, pitch=pitch, volume=volume)
                 elif backend_id == "elevenlabs":
                     model = getattr(backend, "_model", "") or ""
@@ -168,6 +179,8 @@ class Speaker:
                         say = f"{tag} {say}"
                 result = backend.synthesize(say, **kwargs)
                 if result.audio:
+                    if self.on_mp3 is not None and result.format == "mp3":
+                        self.on_mp3(result.audio)
                     return result.audio
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Voz %r falló: %s", backend_id or "?", exc)
@@ -206,6 +219,17 @@ class Speaker:
         sentence. Other voice engines (or a missing PyAV) fall back to
         :meth:`synthesize` and return the complete audio as bytes.
         """
+        key = (str(text), mood or getattr(text, "mood", "") or "neutral")
+        cached = self._cache.get(key)
+        if cached is not None:
+            chunks, rate, mp3 = cached
+            ready = AudioStream()
+            for pcm in chunks:
+                ready.put(pcm, rate)
+            ready.close()
+            if self.on_mp3 is not None and mp3:
+                self.on_mp3(mp3)
+            return ready
         backend = self._resolve()
         if getattr(backend, "backend_id", "") != "edge":
             return self.synthesize(text, mood)
@@ -215,7 +239,7 @@ class Speaker:
             return self.synthesize(text, mood)
 
         mood = mood or getattr(text, "mood", "") or "neutral"
-        speed, pitch, volume = prosody_for(mood, self.cfg.velocidad)
+        speed, pitch, volume = prosody_for(mood, self.cfg.velocidad, self.cfg.tono)
         voice = self._voice_for(backend)
         stream = AudioStream()
 
@@ -234,12 +258,16 @@ class Speaker:
                 pitch=pitch,
                 volume=volume,
             )
+            mp3: list[bytes] = []
             async for chunk in communicate.stream():
                 if chunk.get("type") == "audio":
+                    mp3.append(chunk["data"])
                     for pcm, rate in decoder.feed(chunk["data"]):
                         stream.put(pcm, rate)
             for pcm, rate in decoder.flush():
                 stream.put(pcm, rate)
+            if self.on_mp3 is not None and mp3:
+                self.on_mp3(b"".join(mp3))
 
         def _run() -> None:
             import asyncio
@@ -269,6 +297,29 @@ class Speaker:
         if getattr(data, "ndim", 1) > 1:
             data = data.mean(axis=1)
         stream.put(data, sr)
+
+    def prefetch(self, phrases: list) -> None:
+        """Synthesise fixed phrases now so they play with no delay later."""
+        hook, self.on_mp3 = self.on_mp3, None
+        try:
+            for text in phrases:
+                mood = getattr(text, "mood", "") or "neutral"
+                key = (str(text), mood)
+                if key in self._cache:
+                    continue
+                mp3: list = []
+                self.on_mp3 = mp3.append
+                stream = self.synthesize_streaming(text, mood)
+                if isinstance(stream, AudioStream):
+                    chunks = list(stream)
+                    if chunks:
+                        self._cache[key] = (chunks, stream.sample_rate, b"".join(mp3))
+                self.on_mp3 = None
+        finally:
+            self.on_mp3 = hook
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
 
     def _play_stream(self, stream: AudioStream, on_level: Optional[LevelFn]) -> None:
         """Play an :class:`AudioStream` chunk by chunk as it arrives."""
@@ -351,7 +402,7 @@ class Speaker:
     def say(
         self, text: str, on_level: Optional[LevelFn] = None, mood: str = ""
     ) -> bool:
-        audio = self.synthesize(text, mood)
+        audio = self.synthesize_streaming(text, mood)
         if not audio:
             return False
         try:

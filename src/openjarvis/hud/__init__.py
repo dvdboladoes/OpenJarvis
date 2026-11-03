@@ -5,7 +5,7 @@ spoken briefing (calendar, inbox, business metrics) and then stays in a
 hands-free conversation. Everything is mirrored live on a HUD page served
 locally and opened as a frameless window.
 
-Entry point: ``jarvis hud`` (see :mod:`openjarvis.cli.hud_cmd`).
+Entry points: ``jarvis hud`` or, faster, ``python -m openjarvis.hud``.
 """
 
 from openjarvis.hud.config import HudConfig, load_hud_config

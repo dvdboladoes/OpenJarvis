@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
+import random
 import threading
 import time
 from typing import Any, Dict, Optional
 
+from openjarvis.hud import window
+from openjarvis.hud.agent import AWAIT_REPLY, ClaudeAgent
 from openjarvis.hud.brain import (
     ActionRequest,
     JarvisBrain,
@@ -16,8 +20,14 @@ from openjarvis.hud.brain import (
     is_sleep_command,
     offline_briefing,
 )
-from openjarvis.hud.config import HudConfig, save_config_value
+from openjarvis.hud.config import (
+    SETTINGS,
+    HudConfig,
+    coerce_setting,
+    save_config_value,
+)
 from openjarvis.hud.context import Snapshot, collect_snapshot
+from openjarvis.hud.memory import MemoryStore
 from openjarvis.hud.pc import Action, parse_command
 from openjarvis.hud.pc import execute as run_pc_action
 from openjarvis.hud.server import EventHub, HudServer
@@ -57,6 +67,27 @@ def voice_catalog() -> list:
     return voices
 
 
+_VERSION: Optional[str] = None
+
+
+def _version() -> str:
+    """Short git commit of this install, shown in Ajustes."""
+    global _VERSION
+    if _VERSION is None:
+        from openjarvis.hud.launcher import repo_root, run_hidden
+
+        try:
+            res = run_hidden(
+                ["git", "log", "-1", "--format=%h · %cd", "--date=short"],
+                cwd=repo_root(),
+                timeout=5,
+            )
+            _VERSION = res.stdout.strip() or "?"
+        except Exception:  # noqa: BLE001
+            _VERSION = "?"
+    return _VERSION
+
+
 class JarvisAssistant:
     def __init__(self, cfg: HudConfig, *, mic: bool = True) -> None:
         from openjarvis.core.paths import get_config_dir
@@ -72,7 +103,19 @@ class JarvisAssistant:
             on_done=self._timer_done,
         )
         self.brain.set_notes(self.notes.texts())
+        self.memory = MemoryStore(get_config_dir() / "jarvis_recuerdos.json")
         self.frames = FrameBroker(self.hub.publish)
+        self.agent = ClaudeAgent(
+            cfg,
+            self.brain,
+            self.memory,
+            get_reply=self._wait_reply,
+            look_camera=self._camera_frame,
+            add_timer=lambda secs, label: self.timers.add(secs, label),
+            hide_hud=self._hide_for_screen,
+            show_hud=self._show_after_screen,
+            notify=self.hub.publish,
+        )
         self.server = HudServer(
             self.hub,
             {
@@ -92,8 +135,23 @@ class JarvisAssistant:
                 "heard": self._api_heard,
                 "screen_watch": self._api_screen_watch,
                 "stt_unsupported": self._api_stt_unsupported,
+                "config": self._api_config,
+                "set_config": self._api_set_config,
+                "memory": self._api_memory,
+                "memory_add": self._api_memory_add,
+                "memory_delete": self._api_memory_delete,
+                "memory_update": self._api_memory_update,
+                "memory_import": self._api_memory_import,
+                "background": self._api_background,
+                "wake": self._api_wake,
+                "quit": self._api_quit,
+                "update": self._api_update,
+                "autostart": self._api_autostart,
+                "history": self._api_history,
             },
             port=cfg.puerto,
+            remote=cfg.acceso_remoto,
+            pin=cfg.pin,
         )
         self._use_mic = mic
         self.listener: Any = None
@@ -109,6 +167,13 @@ class JarvisAssistant:
         self._screen_watch = False
         self._t_heard = 0.0
         self.brain.cancel_event = self._cancel
+        self.agent.cancel_event = self._cancel
+        self._awaiting = False
+        self._replies: "queue.Queue[str]" = queue.Queue()
+        self._background = False
+        self._claps: Any = None
+        self._hid_for_screen = False
+        self.speaker.on_mp3 = self._remote_audio
 
     # ── public ─────────────────────────────────────────────────────────
 
@@ -118,6 +183,7 @@ class JarvisAssistant:
         self.hub.publish("voices", items=voice_catalog(), actual=self._voice_info())
         self.hub.publish("notes", items=self.notes.list())
         self.hub.publish("timers", items=self.timers.list())
+        self.hub.publish("memory", items=self.memory.list())
         if self._use_mic:
             self._start_listener()
         for target, name in (
@@ -134,6 +200,8 @@ class JarvisAssistant:
         self.timers.stop()
         if self.listener is not None:
             self.listener.stop()
+        if self._claps is not None:
+            self._claps.stop()
         self.server.stop()
         self.brain.close()
 
@@ -245,19 +313,30 @@ class JarvisAssistant:
         try:
             self.speaker._resolve()  # noqa: SLF001 - pre-load the TTS backend
             status["voz"] = self.speaker.backend_name
+
+            def _voice_ready() -> None:
+                self.speaker.warm_up()
+                self._prefetch_phrases()
+
             threading.Thread(
-                target=self.speaker.warm_up, name="jarvis-voice-warmup", daemon=True
+                target=_voice_ready, name="jarvis-voice-warmup", daemon=True
             ).start()
         except Exception:  # noqa: BLE001
             pass
         try:
             model = self.brain.resolve_model()
-            self._set_state("arrancando", "Cargando el cerebro en memoria…")
+            self._set_state("arrancando", "Cargando el cerebro…")
             t0 = time.monotonic()
-            self.brain.warm_up()
+            if self.uses_agent:
+                self.agent.warm_up()
+            else:
+                self.brain.warm_up()
             logger.info("Modelo %s listo en %.1f s", model, time.monotonic() - t0)
-            sdk = self.brain._ensure_sdk()  # noqa: SLF001
-            engine = getattr(sdk, "_resolved_engine_key", "") or "ok"
+            if self.uses_agent:
+                engine = "directo"
+            else:
+                sdk = self.brain._ensure_sdk()  # noqa: SLF001
+                engine = getattr(sdk, "_resolved_engine_key", "") or "ok"
             status["motor"] = f"{model} · {engine}"
             status["nube"] = is_cloud_model(model)
         except Exception as exc:  # noqa: BLE001
@@ -268,7 +347,14 @@ class JarvisAssistant:
         if not self._session.locked():
             self._set_state("reposo", self._idle_hint())
 
+    @property
+    def uses_agent(self) -> bool:
+        """Claude gets the tool-using agent; local models keep the simple brain."""
+        return (self.cfg.modelo or "").lower().startswith("claude")
+
     def _idle_hint(self) -> str:
+        if self._background:
+            return "En segundo plano"
         if self.continuous and self._mic_enabled:
             return "Le escucho: hable cuando quiera"
         ways = []
@@ -375,8 +461,14 @@ class JarvisAssistant:
                 self._conversation(first_turn=True)
                 return
             self._set_state("activando", "Sistemas en línea")
+            if not self.cfg.briefing_al_despertar:
+                # Instant: a canned greeting needs no language model.
+                self._say(self._greeting())
+                if not self.continuous:
+                    self._conversation()
+                return
             snap = self._snapshot_fast() or Snapshot()
-            self._set_state("pensando", "Preparando su briefing…")
+            self._set_state("pensando", "")
             spoken = self._say_stream(
                 self.brain.stream_briefing(source),
                 fallback=lambda: offline_briefing(self.cfg, snap),
@@ -399,6 +491,19 @@ class JarvisAssistant:
         text = str(payload.get("text", "")).strip()[:2000]
         if not text or len(text) < 2:
             return {"ok": False}
+        if self._background:
+            # Hidden: only "Jarvis, enciéndete" wakes it up.
+            if window.is_wake_phrase(text):
+                threading.Thread(
+                    target=self.exit_background, args=("voz",), daemon=True
+                ).start()
+                return {"ok": True}
+            return {"ok": False, "background": True}
+        if self._awaiting:
+            self._awaiting = False
+            self.hub.publish("message", role="user", text=text)
+            self._replies.put(text)
+            return {"ok": True}
         if self._session.locked():
             return {"ok": False, "busy": True}
         self._t_heard = time.monotonic()
@@ -444,7 +549,7 @@ class JarvisAssistant:
             if not self._begin():
                 return
             try:
-                self._set_state("pensando", "Entendiendo…")
+                self._set_state("pensando", "")
                 try:
                     text = self.ear.transcribe(audio) if self.ear.ready else ""
                 except Exception as exc:  # noqa: BLE001
@@ -505,9 +610,11 @@ class JarvisAssistant:
             # Real-time screen mode: every question comes with a fresh look.
             self._look("pantalla", text)
             return
-        self._set_state("pensando", "Procesando…")
+        self._set_state("pensando", "")
         self._say_stream(
-            self.brain.stream_reply(text),
+            self.agent.stream(text)
+            if self.uses_agent
+            else self.brain.stream_reply(text),
             fallback=lambda: (
                 "Lo siento, mi motor de lenguaje no responde en este momento."
             ),
@@ -591,7 +698,7 @@ class JarvisAssistant:
 
     def _look(self, source: str, question: str) -> None:
         """Answer about the camera or the screen."""
-        self._set_state("pensando", "Mirando…")
+        self._set_state("pensando", "")
         model = self._vision_model()
         if not model:
             self._say(
@@ -709,6 +816,9 @@ class JarvisAssistant:
                 if item is done or isinstance(item, Exception):
                     audio_q.put(item)
                     return
+                if item is AWAIT_REPLY:
+                    audio_q.put((item, None))
+                    continue
                 # A stream: playback starts with the first chunk of audio.
                 audio_q.put((item, self.speaker.synthesize_streaming(item)))
 
@@ -730,6 +840,14 @@ class JarvisAssistant:
                 self._engine_notice(item)
                 failed = True
                 break
+            if item[0] is AWAIT_REPLY:
+                # Everything before the question has been said: listen now.
+                self._awaiting = True
+                self.hub.publish("confirm", pregunta=said[-1] if said else "")
+                self._set_state("escuchando", "Le escucho…")
+                if self.listener is not None and self._mic_enabled:
+                    self.listener.resume()
+                continue
             sentence, audio = item
             ready = getattr(audio, "ready", None)
             if ready is not None:
@@ -961,6 +1079,278 @@ class JarvisAssistant:
     def _api_forget(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
         self.brain.forget()
         self.hub.publish("notice", text="Memoria de conversación borrada.")
+        return {"ok": True}
+
+    # ── instant replies, confirmations and the agent's hooks ─────────────
+
+    def _greetings(self, hour: Optional[int] = None) -> list:
+        hour = time.localtime().tm_hour if hour is None else hour
+        if 6 <= hour < 14:
+            saludo = "Buenos días"
+        elif 14 <= hour < 21:
+            saludo = "Buenas tardes"
+        else:
+            saludo = "Buenas noches"
+        t = self.cfg.honorific
+        return [
+            Spoken(f"{saludo}, {t}. A sus órdenes.", "alegre"),
+            Spoken(f"¡{saludo}, {t}! ¿En qué le ayudo?", "alegre"),
+            Spoken(f"Aquí estoy, {t}. ¿Qué necesita?", "alegre"),
+            Spoken(f"{saludo}, {t}. Sistemas en línea, ¿qué hacemos?", "alegre"),
+        ]
+
+    def _greeting(self) -> Spoken:
+        return random.choice(self._greetings())
+
+    def _background_phrase(self) -> Spoken:
+        return Spoken(
+            f"Me quedo en segundo plano, {self.cfg.honorific}. Dos palmadas o "
+            "«Jarvis, enciéndete» y vuelvo.",
+            "sereno",
+        )
+
+    def _prefetch_phrases(self) -> None:
+        """Have the fixed phrases ready so waking up and "hecho" are instant."""
+        phrases = [Spoken(f"Hecho, {self.cfg.honorific}.", "alegre")]
+        phrases.append(self._background_phrase())
+        for hour in (9, 16, 22):
+            phrases += self._greetings(hour)
+        try:
+            self.speaker.prefetch(phrases)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("No se pudieron preparar las frases: %s", exc)
+
+    def _wait_reply(self, timeout: float) -> Optional[str]:
+        """Block until the user answers a yes/no question (or *timeout*)."""
+        while not self._replies.empty():
+            self._replies.get_nowait()  # drop stale answers
+        deadline = time.monotonic() + timeout
+        try:
+            while time.monotonic() < deadline:
+                if self._cancel.is_set():
+                    return None
+                try:
+                    return self._replies.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+            return None
+        finally:
+            self._awaiting = False
+            self.hub.publish("confirm", pregunta="")
+            if self.listener is not None:
+                self.listener.pause()
+            self._set_state("pensando", "")
+
+    def _remote_audio(self, mp3: bytes) -> None:
+        """Send Jarvis' voice to remote devices (the Chromebook) too."""
+        if self.hub.remote_clients:
+            import base64
+
+            self.hub.publish("audio", mp3=base64.b64encode(mp3).decode("ascii"))
+
+    def _camera_frame(self) -> Optional[str]:
+        self.hub.publish("camera", on=True)
+        return self.frames.request(timeout=8.0)
+
+    def _hide_for_screen(self) -> None:
+        """Get the HUD out of the way while Jarvis looks at / uses the screen."""
+        self._hid_for_screen = window.is_visible() and window.minimize()
+
+    def _show_after_screen(self) -> None:
+        if self._hid_for_screen and not self._background:
+            window.bring_to_front()
+        self._hid_for_screen = False
+
+    # ── background mode: hidden, woken by claps or "Jarvis, enciéndete" ──
+
+    def enter_background(self, announce: bool = True) -> None:
+        if self._background:
+            return
+        self.interrupt()
+        if announce and self._begin():
+            try:
+                self._say(self._background_phrase())
+            finally:
+                self._end()
+        self._background = True
+        self.hub.publish("background", on=True)
+        window.hide()
+        self._start_claps()
+        if self.listener is not None and self._mic_enabled:
+            self.listener.resume()  # the page listens for the wake phrase
+        self._set_state("reposo", self._idle_hint())
+
+    def _show_window(self) -> None:
+        if not window.bring_to_front() and self.cfg.abrir_ventana:
+            from openjarvis.hud.launcher import open_window
+
+            open_window(self.server.url)  # it was closed with the X
+
+    def exit_background(self, source: str = "interfaz") -> None:
+        if not self._background:
+            self._show_window()
+            return
+        self._background = False
+        if self._claps is not None:
+            self._claps.pause()
+        self.hub.publish("background", on=False)
+        self._show_window()
+        self.hub.publish("wake", source=source)
+        self.interrupt()
+        self.wake(source)
+
+    def _start_claps(self) -> None:
+        if not (self._use_mic and self.cfg.palmadas):
+            return
+        if self._claps is not None:
+            self._claps.resume()
+            return
+        try:
+            from openjarvis.hud.triggers import ClapDetector, MicListener
+
+            self._claps = MicListener(
+                on_wake=lambda _src: self.exit_background("palmadas"),
+                on_level=lambda _lvl: None,
+                clap=ClapDetector(self.cfg.sensibilidad_palmadas),
+                wake=None,
+            )
+            self._claps.start()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Detector de palmadas no disponible: %s", exc)
+            self._claps = None
+
+    def _api_background(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if payload.get("cerrada"):
+            # The window was closed with the X: keep running, claps still work.
+            # (A reload also fires this; then the page reconnects at once.)
+            def _closed() -> None:
+                time.sleep(3.0)
+                if self.hub.local_clients == 0:
+                    self.enter_background(announce=False)
+
+            threading.Thread(target=_closed, daemon=True).start()
+        elif payload.get("on", True):
+            threading.Thread(target=self.enter_background, daemon=True).start()
+        else:
+            threading.Thread(target=self.exit_background, daemon=True).start()
+        return {"ok": True}
+
+    def _api_wake(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        threading.Thread(target=self.exit_background, daemon=True).start()
+        return {"ok": True}
+
+    def _api_quit(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        def _bye() -> None:
+            self.hub.publish("quit")
+            time.sleep(0.6)  # let the page close its window
+            self.stop()
+
+        threading.Thread(target=_bye, daemon=True).start()
+        return {"ok": True}
+
+    # ── settings, memory, history, updates ──────────────────────────────
+
+    def _api_config(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        from openjarvis.hud.launcher import autostart_installed, local_addresses
+
+        settings = [
+            {**spec, "valor": getattr(self.cfg, spec["attr"])} for spec in SETTINGS
+        ]
+        return {
+            "ajustes": settings,
+            "voces": voice_catalog(),
+            "voz": self._voice_info(),
+            "autoarranque": autostart_installed(),
+            "remoto": {
+                "activo": self.server.remote,
+                "direcciones": [
+                    f"http://{ip}:{self.cfg.puerto}/" for ip in local_addresses()
+                ],
+            },
+            "version": _version(),
+        }
+
+    def _api_set_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        section, key = str(payload.get("seccion", "")), str(payload.get("clave", ""))
+        spec = next(
+            (s for s in SETTINGS if s["seccion"] == section and s["clave"] == key),
+            None,
+        )
+        if spec is None:
+            raise ValueError("Ajuste desconocido")
+        value = coerce_setting(spec, payload.get("valor"))
+        if spec["attr"] == "pin" and value and (not value.isdigit() or len(value) < 4):
+            raise ValueError("El PIN debe tener al menos 4 cifras.")
+        setattr(self.cfg, spec["attr"], value)
+        if self.cfg.path is not None:
+            save_config_value(self.cfg.path, section, key, value)
+        if spec["attr"] == "modelo":
+            self.brain._model = None  # noqa: SLF001 - resolve again
+        if spec["attr"] == "silencio":
+            self.hub.publish("status", silencio=value)
+        if spec["attr"] == "pin":
+            self.server.pin = value
+        return {"valor": value, "reinicio": bool(spec.get("reinicio"))}
+
+    def _api_memory(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {"items": self.memory.list()}
+
+    def _publish_memory(self) -> Dict[str, Any]:
+        items = self.memory.list()
+        self.hub.publish("memory", items=items)
+        return {"items": items}
+
+    def _api_memory_add(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.memory.add(str(payload.get("texto", "")))
+        return self._publish_memory()
+
+    def _api_memory_delete(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.memory.delete(str(payload.get("id", "")))
+        return self._publish_memory()
+
+    def _api_memory_update(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.memory.update(str(payload.get("id", "")), str(payload.get("texto", "")))
+        return self._publish_memory()
+
+    def _api_memory_import(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        text = str(payload.get("texto", "")).strip()
+        if len(text) < 10:
+            raise ValueError("Pega el texto que te ha dado la otra IA.")
+        added = self.agent.import_memories(text)
+        return {"nuevos": added, **self._publish_memory()}
+
+    def _api_history(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "items": [
+                {"role": r, "text": c}
+                for r, c in self.brain._history[-80:]  # noqa: SLF001
+            ]
+        }
+
+    def _api_autostart(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        from openjarvis.hud.launcher import install_autostart, remove_autostart
+
+        if payload.get("on"):
+            install_autostart()
+        else:
+            remove_autostart()
+        return {"on": bool(payload.get("on"))}
+
+    def _api_update(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Download the latest Jarvis and restart (no terminal needed)."""
+        from openjarvis.hud.launcher import schedule_update_and_restart
+
+        def _run() -> None:
+            self.hub.publish(
+                "notice", text="Actualizando Jarvis… vuelvo en un momento."
+            )
+            time.sleep(0.5)
+            schedule_update_and_restart()
+            self.hub.publish("quit")
+            time.sleep(0.6)
+            self.stop()
+
+        threading.Thread(target=_run, daemon=True).start()
         return {"ok": True}
 
     # ── events ─────────────────────────────────────────────────────────

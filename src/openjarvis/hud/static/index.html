@@ -2,356 +2,405 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>J.A.R.V.I.S.</title>
+<link rel="icon" href="icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
-  --void: #000309;
-  --ink: #e4f6ff;
-  --muted: #6d8ea4;
-  --faint: rgba(120, 210, 255, 0.10);
-  --glass: rgba(6, 22, 38, 0.46);
-  --accent: #29e7ff;
+  --bg: #02050b;
+  --ink: #e8f8ff;
+  --dim: #7f9fb4;
+  --faint: #3e5a6e;
+  --glass: rgba(8, 22, 36, .55);
+  --glass-hi: rgba(14, 36, 56, .72);
+  --line: rgba(120, 220, 255, .14);
+  --line-hi: rgba(120, 220, 255, .32);
+  --accent: rgb(41, 231, 255);
   --accent-rgb: 41, 231, 255;
-  --good: #5dffa8;
-  --bad: #ff4d6a;
-  --display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
-  --body: "Manrope", "Segoe UI", system-ui, sans-serif;
-  --ease: cubic-bezier(.2, .8, .2, 1);
+  --ok: #4dffb0;
+  --warn: #ffc246;
+  --bad: #ff5c7a;
+  --display: "Chakra Petch", ui-monospace, monospace;
+  --body: "Manrope", system-ui, sans-serif;
+  --r: 18px;
 }
 * { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
 body {
-  background: radial-gradient(ellipse 70% 60% at 50% 45%, rgba(var(--accent-rgb), .10), transparent 70%), var(--void);
-  color: var(--ink); font-family: var(--body); overflow: hidden;
-  -webkit-font-smoothing: antialiased; transition: background 1.2s var(--ease);
-  user-select: none;
+  background:
+    radial-gradient(1200px 700px at 50% 38%, rgba(var(--accent-rgb), .10), transparent 60%),
+    radial-gradient(900px 600px at 85% 110%, rgba(90, 80, 255, .10), transparent 60%),
+    radial-gradient(700px 500px at 0% 0%, rgba(0, 180, 255, .07), transparent 60%),
+    var(--bg);
+  color: var(--ink); font: 15px/1.5 var(--body); -webkit-font-smoothing: antialiased;
+  transition: background .8s;
 }
-input, textarea { user-select: text; }
-#scene, #fallback { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
-#fallback { display: none; }
-.scan { position: fixed; inset: 0; pointer-events: none; z-index: 1;
-  background: repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px);
-  mask-image: radial-gradient(ellipse at center, transparent 30%, #000 100%); }
-.vignette { position: fixed; inset: 0; pointer-events: none; z-index: 1;
-  background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.75) 100%); }
+body::before { /* holographic grid */
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image: linear-gradient(rgba(var(--accent-rgb), .045) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(var(--accent-rgb), .045) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse at 50% 45%, #000 20%, transparent 75%);
+}
+body::after { /* vignette + scanline */
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, .65)),
+              repeating-linear-gradient(0deg, rgba(255, 255, 255, .012) 0 1px, transparent 1px 3px);
+}
+canvas#scene, canvas#fallback { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
+canvas#fallback { display: none; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.hidden { display: none !important; }
 
-/* ── layout ─────────────────────────────────────────── */
-.hud { position: relative; z-index: 2; height: 100vh; display: grid; pointer-events: none;
-  grid-template-columns: minmax(260px, 330px) 1fr minmax(260px, 330px);
-  grid-template-rows: auto 1fr auto; gap: 18px 24px; padding: 18px 26px 18px; }
-.hud > * { pointer-events: auto; }
-.top { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
-.left, .right { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
-.center { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-height: 0; pointer-events: none; padding-bottom: 6px; }
-.bottom { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 20px; }
-body.cinema .left, body.cinema .right { opacity: 0; transform: translateX(var(--off)); pointer-events: none; }
-.left { --off: -40px; } .right { --off: 40px; }
-.left, .right { transition: opacity .6s var(--ease), transform .6s var(--ease); }
-
-/* ── top bar ────────────────────────────────────────── */
-.brand { display: flex; align-items: center; gap: 14px; }
-.logo { width: 42px; height: 42px; position: relative; }
-.logo svg { width: 100%; height: 100%; animation: spin 12s linear infinite; }
+/* ── shell ───────────────────────────────────────────── */
+.app { position: fixed; inset: 0; z-index: 2; display: grid; grid-template-columns: 76px 1fr; }
+.rail {
+  margin: 14px 0 14px 14px; padding: 14px 0; border-radius: 24px;
+  background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(18px) saturate(140%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.logo { width: 38px; height: 38px; margin-bottom: 14px; border-radius: 50%; position: relative;
+  background: radial-gradient(circle, #fff 0 18%, rgba(var(--accent-rgb), .9) 30%, transparent 62%);
+  box-shadow: 0 0 22px rgba(var(--accent-rgb), .7); animation: breathe 3.2s ease-in-out infinite; }
+.logo::after { content: ""; position: absolute; inset: -5px; border-radius: 50%;
+  border: 1.5px dashed rgba(var(--accent-rgb), .7); animation: spin 9s linear infinite; }
+@keyframes breathe { 50% { box-shadow: 0 0 36px rgba(var(--accent-rgb), 1); } }
 @keyframes spin { to { transform: rotate(360deg); } }
-.brand h1 { margin: 0; font: 700 22px/1 var(--display); letter-spacing: .38em; color: #fff;
-  text-shadow: 0 0 22px rgba(var(--accent-rgb), .8); }
-.brand .ticker { font: 500 12px/1 var(--display); color: var(--accent); letter-spacing: .12em; margin-top: 7px; min-height: 12px; white-space: nowrap; }
-.clock { text-align: center; font-family: var(--display); }
-.clock .t { font-size: 38px; font-weight: 600; letter-spacing: .06em; font-variant-numeric: tabular-nums; line-height: 1; }
-.clock .t small { font-size: 18px; color: var(--accent); margin-left: 2px; }
-.clock .d { font-size: 13px; color: var(--muted); margin-top: 5px; letter-spacing: .05em; }
-.gauges { display: flex; gap: 14px; align-items: center; }
-.gauge { width: 54px; text-align: center; font-family: var(--display); }
-.gauge svg { width: 54px; height: 54px; transform: rotate(-90deg); }
-.gauge circle { fill: none; stroke-width: 4; }
-.gauge .bg { stroke: var(--faint); }
-.gauge .fg { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .8s var(--ease), stroke .8s; filter: drop-shadow(0 0 4px rgba(var(--accent-rgb), .8)); }
-.gauge .val { margin-top: -38px; font-size: 13px; font-weight: 600; height: 24px; }
-.gauge .lbl { font-size: 10px; color: var(--muted); margin-top: 10px; letter-spacing: .1em; }
-.weather { font-family: var(--display); text-align: right; max-width: 190px; }
-.weather .tmp { font-size: 26px; font-weight: 600; line-height: 1; }
-.weather .cond { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.nav { width: 50px; height: 50px; border-radius: 15px; border: 1px solid transparent; background: transparent;
+  display: grid; place-items: center; color: var(--dim); position: relative; transition: .2s; }
+.nav svg { width: 22px; height: 22px; }
+.nav:hover { color: var(--ink); background: rgba(var(--accent-rgb), .07); }
+.nav.on { color: var(--accent); background: rgba(var(--accent-rgb), .12); border-color: rgba(var(--accent-rgb), .35);
+  box-shadow: 0 0 18px rgba(var(--accent-rgb), .25), inset 0 0 12px rgba(var(--accent-rgb), .12); }
+.nav .tip { position: absolute; left: 62px; white-space: nowrap; padding: 6px 10px; border-radius: 9px;
+  background: var(--glass-hi); border: 1px solid var(--line); font-size: 12.5px; color: var(--ink);
+  opacity: 0; pointer-events: none; transform: translateX(-6px); transition: .18s; }
+.nav:hover .tip { opacity: 1; transform: none; }
+.rail .spacer { flex: 1; }
+.nav.danger:hover { color: var(--bad); background: rgba(255, 92, 122, .08); }
+.nav.mic-off { color: var(--bad); }
 
-/* ── panels ─────────────────────────────────────────── */
-.panel { position: relative; background: var(--glass); backdrop-filter: blur(10px) saturate(140%);
-  border: 1px solid rgba(var(--accent-rgb), .16); border-radius: 3px; padding: 14px 16px; min-height: 0; overflow: hidden;
-  transition: border-color .8s, box-shadow .8s, opacity .7s var(--ease), transform .7s var(--ease); }
-.panel::before { content: ""; position: absolute; left: 0; top: 0; width: 34%; height: 2px; background: linear-gradient(90deg, var(--accent), transparent); }
-.panel:hover { border-color: rgba(var(--accent-rgb), .45); box-shadow: 0 0 30px rgba(var(--accent-rgb), .12), inset 0 0 30px rgba(var(--accent-rgb), .04); }
-.panel.grow { flex: 1; display: flex; flex-direction: column; }
-.panel h2 { margin: 0 0 10px; font: 600 14px/1.2 var(--display); letter-spacing: .14em; color: var(--accent);
-  display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-.panel h2 .n { color: var(--muted); font-weight: 500; letter-spacing: .04em; font-size: 12px; }
-.scroll { overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(var(--accent-rgb), .3) transparent; min-height: 0; }
-.empty { color: var(--muted); font-size: 13px; line-height: 1.5; }
-.empty code { color: var(--accent); }
-.boot .panel { opacity: 0; transform: translateY(14px); }
+.main { position: relative; display: grid; grid-template-rows: auto 1fr; min-width: 0; }
+.top { display: flex; align-items: center; gap: 14px; padding: 18px 26px 0 22px; }
+.brand { font: 700 19px/1 var(--display); letter-spacing: .42em; }
+.brand b { color: var(--accent); text-shadow: 0 0 18px rgba(var(--accent-rgb), .8); font-weight: 700; }
+.pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 10px; border-radius: 99px;
+  background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(12px);
+  font: 600 11.5px/1 var(--display); letter-spacing: .22em; color: var(--accent); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+body[data-state="escuchando"] .dot { animation: blink 1s infinite; }
+body[data-state="hablando"] .dot { animation: blink .5s infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+.top .grow { flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 12px;
+  background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(12px); font-size: 13px; color: var(--dim); }
+.chip strong { color: var(--ink); font: 600 14px var(--display); letter-spacing: .04em; }
+.clock { font: 600 22px/1 var(--display); letter-spacing: .08em; }
+.clock small { font-size: 12px; color: var(--accent); margin-left: 2px; }
+.gauges { display: flex; gap: 10px; }
+.gauge { width: 66px; }
+.gauge .k { font: 600 9.5px var(--display); letter-spacing: .18em; color: var(--dim); display: flex; justify-content: space-between; }
+.gauge .bar { height: 4px; border-radius: 4px; background: rgba(255, 255, 255, .07); overflow: hidden; margin-top: 4px; }
+.gauge .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, rgba(var(--accent-rgb), .5), var(--accent)); transition: width .6s; }
+.remote-badge { display: none; }
+body.remote .remote-badge { display: inline-flex; }
 
-/* agenda timeline */
-.timeline { list-style: none; margin: 0; padding: 0 0 0 14px; position: relative; }
-.timeline::before { content: ""; position: absolute; left: 4px; top: 6px; bottom: 6px; width: 1px; background: linear-gradient(var(--accent), transparent); opacity: .5; }
-.timeline li { position: relative; padding: 6px 0 9px; font-size: 13.5px; line-height: 1.35; }
-.timeline li::before { content: ""; position: absolute; left: -14px; top: 11px; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--accent); background: var(--void); }
-.timeline li.past { opacity: .45; }
-.timeline li.next::before { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
-.timeline .h { font: 600 13px var(--display); color: var(--accent); margin-right: 6px; }
-.inbox { list-style: none; margin: 0; padding: 0; }
-.inbox li { font-size: 13px; line-height: 1.4; padding: 7px 0; border-top: 1px solid var(--faint); }
-.inbox li:first-child { border-top: 0; }
+/* ── views ───────────────────────────────────────────── */
+.view { position: absolute; inset: 64px 22px 18px 22px; display: none; }
+.view.on { display: block; animation: rise .35s cubic-bezier(.2, .8, .2, 1); }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
 
-/* metrics */
-.metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.metric { padding: 9px 10px; background: rgba(var(--accent-rgb), .05); border-left: 2px solid var(--accent); cursor: default; transition: background .3s; }
-.metric:hover { background: rgba(var(--accent-rgb), .12); }
-.metric .v { font: 600 21px/1 var(--display); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.metric .c { font: 600 12px var(--display); margin-left: 5px; }
-.metric .c.up { color: var(--good); } .metric .c.down { color: var(--bad); }
-.metric .k { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+/* home */
+#v-home { pointer-events: none; }
+#v-home > * { pointer-events: auto; }
+.stage { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; gap: 14px; padding-bottom: 6px; }
+.subs { width: min(860px, 92%); text-align: center; min-height: 116px; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; }
+.you { color: var(--dim); font-size: 15px; min-height: 22px; }
+.you::before { content: "TÚ  ·  "; font: 600 10.5px var(--display); letter-spacing: .25em; color: var(--faint); }
+.you:empty::before { content: ""; }
+.jarvis { font: 500 23px/1.4 var(--body); letter-spacing: -.005em; text-wrap: balance;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, .8); max-height: 3.2em; overflow: hidden; }
+.jarvis .w { opacity: 0; animation: word .35s forwards; }
+@keyframes word { to { opacity: 1; } }
+.hint { font: 500 12px var(--display); letter-spacing: .22em; color: var(--faint); text-transform: uppercase; min-height: 18px; }
+.timing { font: 500 11px var(--display); letter-spacing: .14em; color: var(--accent); opacity: .55; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.qa { padding: 8px 14px; border-radius: 99px; border: 1px solid var(--line); background: var(--glass);
+  backdrop-filter: blur(12px); color: var(--dim); font-size: 13px; transition: .2s; }
+.qa:hover { color: var(--ink); border-color: var(--line-hi); background: var(--glass-hi); transform: translateY(-1px); }
+.qa.on { color: var(--accent); border-color: rgba(var(--accent-rgb), .5); }
+.ask { width: min(720px, 94%); display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 18px; border-radius: 18px;
+  background: var(--glass-hi); border: 1px solid var(--line); backdrop-filter: blur(20px) saturate(150%);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, .45); transition: .2s; }
+.ask:focus-within { border-color: rgba(var(--accent-rgb), .5); box-shadow: 0 0 0 4px rgba(var(--accent-rgb), .08), 0 10px 40px rgba(0, 0, 0, .45); }
+.ask input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; padding: 10px 0; font-size: 15.5px; }
+.ask input::placeholder { color: var(--faint); }
+.ib { width: 42px; height: 42px; border-radius: 13px; border: 1px solid var(--line); background: rgba(255, 255, 255, .03);
+  display: grid; place-items: center; color: var(--dim); transition: .2s; flex: none; }
+.ib svg { width: 20px; height: 20px; }
+.ib:hover { color: var(--ink); border-color: var(--line-hi); }
+.ib.primary { background: var(--accent); color: #02121c; border-color: transparent; box-shadow: 0 0 22px rgba(var(--accent-rgb), .45); }
+.ib.live { color: var(--accent); border-color: rgba(var(--accent-rgb), .5); box-shadow: 0 0 16px rgba(var(--accent-rgb), .3); }
+.kbd { font: 600 10px var(--display); color: var(--faint); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
 
-/* timers */
-.timers { display: flex; flex-wrap: wrap; gap: 10px; }
-.timer { position: relative; width: 74px; text-align: center; cursor: pointer; }
-.timer svg { width: 74px; height: 74px; transform: rotate(-90deg); }
-.timer circle { fill: none; stroke-width: 3; }
-.timer .bg { stroke: var(--faint); } .timer .fg { stroke: var(--accent); stroke-linecap: round; }
-.timer .tv { position: absolute; left: 0; right: 0; top: 24px; font: 600 15px var(--display); font-variant-numeric: tabular-nums; }
-.timer .tl { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
-.timer:hover .tv::after { content: "cancelar"; display: block; font-size: 9px; color: var(--bad); }
-.chipline { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-
-/* notes */
-.notes { list-style: none; margin: 0; padding: 0; }
-.notes li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.4; padding: 6px 0; border-top: 1px solid var(--faint); }
-.notes li:first-child { border-top: 0; }
-.notes li span { flex: 1; }
-.notes li button { opacity: 0; }
-.notes li:hover button { opacity: 1; }
-.noteadd { display: flex; gap: 6px; margin-top: 8px; }
-
-/* ── center: state + subtitles ──────────────────────── */
-.state { font: 700 15px var(--display); letter-spacing: .5em; color: var(--accent); text-shadow: 0 0 16px rgba(var(--accent-rgb), .9); padding-left: .5em; }
-.sub { font-size: 13px; color: var(--muted); margin-top: 6px; min-height: 18px; letter-spacing: .02em; }
-.moodtag { display: inline-flex; align-items: center; gap: 6px; font: 600 11px var(--display); letter-spacing: .18em; color: var(--accent); margin-top: 10px; opacity: .85; }
-.moodtag[hidden] { display: none; }
-.moodtag i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
-.subtitles { margin-top: 16px; max-width: 820px; min-height: 90px; text-align: center; font: 500 clamp(18px, 1.6vw, 24px)/1.45 var(--body);
-  color: #fff; text-shadow: 0 2px 16px rgba(0,0,0,.9); }
-.subtitles .w { opacity: 0; display: inline-block; transform: translateY(6px); filter: blur(4px); animation: word .38s var(--ease) forwards; }
-@keyframes word { to { opacity: 1; transform: none; filter: none; } }
-.timing { margin-top: 6px; font: 500 11px/1 var(--display, monospace); letter-spacing: .12em; color: var(--accent); opacity: .55; }
-.timing[hidden] { display: none; }
-.subtitles.user { color: var(--accent); font-style: italic; }
-
-/* ── bottom bar ─────────────────────────────────────── */
-.chips { display: flex; gap: 8px; flex-wrap: wrap; }
-.chip { font: 500 12.5px var(--display); letter-spacing: .04em; color: var(--ink); background: rgba(var(--accent-rgb), .07);
-  border: 1px solid rgba(var(--accent-rgb), .25); padding: 7px 12px; border-radius: 20px; cursor: pointer; transition: all .2s var(--ease); }
-.chip:hover { background: rgba(var(--accent-rgb), .2); border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 6px 20px rgba(var(--accent-rgb), .2); }
-.mic { width: 74px; height: 74px; border-radius: 50%; border: 0; cursor: pointer; position: relative;
-  background: radial-gradient(circle at 50% 40%, rgba(var(--accent-rgb), .55), rgba(var(--accent-rgb), .12) 70%);
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), .6), 0 0 40px rgba(var(--accent-rgb), .35); transition: transform .2s var(--ease), box-shadow .3s; }
-.mic:hover { transform: scale(1.06); }
-.mic svg { width: 28px; height: 28px; fill: #fff; }
-.mic::after { content: ""; position: absolute; inset: -8px; border-radius: 50%; border: 1px solid rgba(var(--accent-rgb), .5); opacity: 0; }
-body[data-state="escuchando"] .mic::after { animation: ping 1.2s ease-out infinite; }
-@keyframes ping { from { opacity: .9; transform: scale(.9); } to { opacity: 0; transform: scale(1.5); } }
-.mic.off { filter: grayscale(1) brightness(.6); }
-.tools { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
-.ask { display: flex; flex: 1; max-width: 360px; }
-.ask input, .field { flex: 1; min-width: 0; background: rgba(4, 18, 30, .75); border: 1px solid rgba(var(--accent-rgb), .25); color: var(--ink);
-  font: 14px var(--body); padding: 10px 12px; border-radius: 3px; outline: none; }
-.ask input:focus, .field:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 20px rgba(var(--accent-rgb), .25); }
-.ibtn { width: 40px; height: 40px; border-radius: 3px; border: 1px solid rgba(var(--accent-rgb), .25); background: rgba(4, 18, 30, .6);
-  color: var(--ink); cursor: pointer; display: grid; place-items: center; transition: all .2s; }
-.ibtn:hover, .ibtn.on { border-color: var(--accent); background: rgba(var(--accent-rgb), .15); color: #fff; }
-.ibtn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.btn { font: 600 12px var(--display); letter-spacing: .08em; color: var(--void); background: var(--accent); border: 0; padding: 8px 12px; border-radius: 2px; cursor: pointer; }
-.btn.ghost { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), .5); }
-.x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 4px; }
-.x:hover { color: var(--bad); }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-kbd { font: 600 10px var(--display); border: 1px solid rgba(var(--accent-rgb), .4); border-radius: 3px; padding: 1px 5px; color: var(--muted); }
-
-/* ── drawers, palette, toast ────────────────────────── */
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw); z-index: 20; background: rgba(2, 10, 18, .92); backdrop-filter: blur(16px);
-  border-left: 1px solid rgba(var(--accent-rgb), .3); transform: translateX(105%); transition: transform .45s var(--ease); display: flex; flex-direction: column; padding: 18px; gap: 12px; }
-.drawer.open { transform: none; }
-.drawer h3 { margin: 0; font: 600 16px var(--display); letter-spacing: .18em; color: var(--accent); display: flex; justify-content: space-between; align-items: center; }
-.chat { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 6px; }
-.bubble { max-width: 88%; padding: 9px 12px; border-radius: 10px; font-size: 14px; line-height: 1.45; }
-.bubble.jarvis { align-self: flex-start; background: rgba(var(--accent-rgb), .1); border: 1px solid rgba(var(--accent-rgb), .25); border-bottom-left-radius: 2px; }
-.bubble.user { align-self: flex-end; background: rgba(255,255,255,.07); border-bottom-right-radius: 2px; }
-.bubble small { display: block; font: 600 10px var(--display); color: var(--muted); letter-spacing: .12em; margin-bottom: 3px; }
-.voices { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
-.voice { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid rgba(var(--accent-rgb), .2); cursor: pointer; border-radius: 3px; font-size: 14px; transition: all .2s; }
-.voice:hover { border-color: var(--accent); background: rgba(var(--accent-rgb), .08); }
-.voice.sel { border-color: var(--accent); background: rgba(var(--accent-rgb), .16); box-shadow: inset 3px 0 0 var(--accent); }
-.voice .m { font: 500 11px var(--display); color: var(--muted); }
-.row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 14px; padding: 6px 0; }
-.switch { width: 42px; height: 22px; border-radius: 11px; background: var(--faint); position: relative; cursor: pointer; border: 1px solid rgba(var(--accent-rgb), .3); }
-.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--muted); transition: all .25s var(--ease); }
-.switch.on { background: rgba(var(--accent-rgb), .35); } .switch.on::after { left: 22px; background: #fff; box-shadow: 0 0 8px var(--accent); }
-.palette { position: fixed; inset: 0; z-index: 30; display: none; place-items: start center; padding-top: 14vh; background: rgba(0, 3, 9, .55); backdrop-filter: blur(4px); }
-.palette.open { display: grid; }
-.palette .box { width: min(560px, 92vw); background: rgba(3, 14, 24, .96); border: 1px solid var(--accent); box-shadow: 0 0 60px rgba(var(--accent-rgb), .25); border-radius: 4px; overflow: hidden; }
-.palette input { width: 100%; background: transparent; border: 0; border-bottom: 1px solid rgba(var(--accent-rgb), .3); color: #fff; font: 16px var(--body); padding: 16px 18px; outline: none; }
-.palette ul { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow-y: auto; }
-.palette li { padding: 10px 12px; border-radius: 3px; cursor: pointer; display: flex; justify-content: space-between; font-size: 14px; }
-.palette li.act, .palette li:hover { background: rgba(var(--accent-rgb), .16); }
-.palette li span { color: var(--muted); font: 500 11px var(--display); letter-spacing: .08em; }
-.toast { position: fixed; top: 16px; left: 50%; transform: translate(-50%, -160%); z-index: 40; visibility: hidden; transition: transform .4s var(--ease), visibility 0s .4s;
-  background: rgba(30, 18, 2, .94); border: 1px solid #ffb84a; color: #ffe3b8; padding: 10px 16px; font-size: 13.5px; max-width: 80vw; border-radius: 3px; }
-.toast.show { transform: translate(-50%, 0); visibility: visible; transition: transform .4s var(--ease); }
-.flash { position: fixed; inset: 0; z-index: 15; pointer-events: none; background: radial-gradient(circle at 50% 45%, rgba(var(--accent-rgb), .5), transparent 60%); opacity: 0; }
-.flash.go { animation: flash .9s ease-out; }
-@keyframes flash { 0% { opacity: 1; } 100% { opacity: 0; } }
-body.alarm { animation: alarm .5s steps(2) 6; }
-@keyframes alarm { 50% { box-shadow: inset 0 0 120px rgba(255, 77, 106, .7); } }
+/* activity + confirm + toast */
+.activity { position: absolute; top: 4px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; align-items: center; z-index: 5; pointer-events: none; }
+.act { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-radius: 14px; background: var(--glass-hi);
+  border: 1px solid rgba(var(--accent-rgb), .35); backdrop-filter: blur(16px); font-size: 13.5px;
+  box-shadow: 0 0 24px rgba(var(--accent-rgb), .18); animation: pop .3s cubic-bezier(.2, .9, .3, 1.3); }
+.act .ring { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(var(--accent-rgb), .25); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+.act.done .ring { animation: none; border-color: var(--ok); background: var(--ok); }
+@keyframes pop { from { opacity: 0; transform: translateY(-8px) scale(.96); } }
+.confirm { position: absolute; left: 50%; bottom: 210px; transform: translateX(-50%); width: min(520px, 92%);
+  padding: 18px 20px; border-radius: var(--r); background: var(--glass-hi); border: 1px solid rgba(255, 194, 70, .45);
+  backdrop-filter: blur(20px); box-shadow: 0 0 40px rgba(255, 194, 70, .15); display: none; z-index: 6; }
+.confirm.on { display: block; animation: pop .3s; }
+.confirm h4 { margin: 0 0 4px; font: 600 11.5px var(--display); letter-spacing: .22em; color: var(--warn); }
+.confirm p { margin: 0 0 14px; }
+.confirm .row { display: flex; gap: 10px; justify-content: flex-end; }
+.btn { padding: 10px 18px; border-radius: 12px; border: 1px solid var(--line-hi); background: rgba(255, 255, 255, .04); font-weight: 600; transition: .2s; }
+.btn:hover { background: rgba(255, 255, 255, .08); }
+.btn.go { background: var(--accent); color: #02121c; border-color: transparent; }
+.btn.warn { background: var(--warn); color: #241600; border-color: transparent; }
+.btn.bad { color: var(--bad); border-color: rgba(255, 92, 122, .4); }
+.btn:disabled { opacity: .5; cursor: default; }
+.toast { position: fixed; top: 74px; right: 26px; max-width: 420px; padding: 12px 16px; border-radius: 14px; z-index: 20;
+  background: var(--glass-hi); border: 1px solid var(--line-hi); backdrop-filter: blur(16px); font-size: 14px;
+  opacity: 0; transform: translateY(10px); transition: .3s; pointer-events: none; }
+.toast.on { opacity: 1; transform: none; }
 
 /* camera */
-.cam { position: fixed; z-index: 6; left: 50%; top: 92px; transform: translateX(-50%) scale(.9); width: 260px; aspect-ratio: 4 / 3;
-  border: 1px solid var(--accent); box-shadow: 0 0 40px rgba(var(--accent-rgb), .35); border-radius: 4px; overflow: hidden; opacity: 0;
-  pointer-events: none; transition: opacity .4s var(--ease), transform .4s var(--ease); background: #000; }
-.cam.on { opacity: 1; transform: translateX(-50%) scale(1); pointer-events: auto; }
+.cam { position: absolute; right: 0; bottom: 120px; width: 300px; aspect-ratio: 16/10; border-radius: 16px; overflow: hidden;
+  border: 1px solid rgba(var(--accent-rgb), .45); box-shadow: 0 0 30px rgba(var(--accent-rgb), .25); display: none; background: #000; z-index: 4; }
+.cam.on { display: block; animation: pop .3s; }
 .cam video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-.cam .tag { position: absolute; left: 8px; top: 6px; font: 600 10px var(--display); letter-spacing: .16em; color: #fff; display: flex; gap: 6px; align-items: center; text-shadow: 0 1px 4px #000; }
-.cam .tag i { width: 7px; height: 7px; border-radius: 50%; background: #ff3b4f; box-shadow: 0 0 8px #ff3b4f; animation: blink 1.2s infinite; }
-@keyframes blink { 50% { opacity: .2; } }
-.cam .shot { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
-.cam .shot.go { animation: flash .5s ease-out; }
-.cam .close { position: absolute; right: 4px; top: 2px; }
+.cam .x { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 9px; border: 0; background: rgba(0, 0, 0, .55); color: #fff; }
+.cam .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+.cam .flash.go { animation: flash .35s; }
+@keyframes flash { 0% { opacity: .7; } 100% { opacity: 0; } }
 
-/* mini widget (screen-watch mode) */
-.watchtag { display: none; align-items: center; gap: 6px; font: 600 10px var(--display); letter-spacing: .16em; color: var(--accent); margin-top: 8px; }
-.watchtag i { width: 7px; height: 7px; border-radius: 50%; background: #ff3b4f; box-shadow: 0 0 8px #ff3b4f; animation: blink 1.2s infinite; }
-body.watching .watchtag { display: inline-flex; }
-body.mini .left, body.mini .right, body.mini .chips, body.mini .clock, body.mini .gauges,
-body.mini .ask, body.mini .brand .ticker, body.mini #b-hist, body.mini #b-voice, body.mini #b-cine,
-body.mini #b-full, body.mini #b-cam, body.mini .moodtag { display: none !important; }
-body.mini .hud { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; padding: 10px 12px; gap: 6px; }
-body.mini .brand h1 { font-size: 13px; letter-spacing: .3em; }
-body.mini .logo { width: 24px; height: 24px; }
-body.mini .center { padding-bottom: 0; }
-body.mini .state { font-size: 11px; }
-body.mini .sub { font-size: 11px; margin-top: 3px; }
-body.mini .subtitles { font-size: 14px; min-height: 0; max-height: 120px; overflow: hidden; margin-top: 6px; }
-body.mini .bottom { display: flex; justify-content: center; align-items: center; gap: 14px; }
-body.mini .mic { width: 50px; height: 50px; }
-body.mini .mic svg { width: 20px; height: 20px; }
-body.mini .tools { gap: 6px; }
+/* panels (chat, memory, settings, remote) */
+.panel { position: absolute; top: 0; bottom: 0; right: 0; width: min(760px, 100%); display: flex; flex-direction: column;
+  border-radius: 24px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .5); overflow: hidden; }
+.panel header { padding: 22px 26px 14px; border-bottom: 1px solid var(--line); }
+.panel h2 { margin: 0; font: 600 13px var(--display); letter-spacing: .3em; color: var(--accent); }
+.panel header p { margin: 6px 0 0; color: var(--dim); font-size: 14px; }
+.panel .body { flex: 1; overflow: auto; padding: 18px 26px 26px; scrollbar-width: thin; scrollbar-color: var(--faint) transparent; }
+body.panel-open #scene { filter: blur(2px) brightness(.7); transition: filter .4s; }
 
-/* boot */
-.bootscreen { position: fixed; inset: 0; z-index: 50; background: #000; display: grid; place-items: center; transition: opacity .8s var(--ease); }
-.bootscreen.done { opacity: 0; pointer-events: none; }
-.bootscreen pre { font: 500 13px/1.7 var(--display); color: var(--accent); letter-spacing: .1em; min-width: 360px; margin: 0; text-shadow: 0 0 10px rgba(var(--accent-rgb), .7); }
-.bootscreen .bar { height: 2px; background: var(--faint); margin-top: 14px; overflow: hidden; }
-.bootscreen .bar i { display: block; height: 100%; width: 0; background: var(--accent); box-shadow: 0 0 12px var(--accent); transition: width .25s; }
+/* chat */
+.msgs { display: flex; flex-direction: column; gap: 10px; }
+.msg { max-width: 82%; padding: 10px 14px; border-radius: 16px; line-height: 1.5; }
+.msg.user { align-self: flex-end; background: rgba(var(--accent-rgb), .14); border: 1px solid rgba(var(--accent-rgb), .25); border-bottom-right-radius: 5px; }
+.msg.jarvis { align-self: flex-start; background: rgba(255, 255, 255, .045); border: 1px solid var(--line); border-bottom-left-radius: 5px; }
+.empty { color: var(--faint); text-align: center; padding: 40px 0; }
 
-@media (max-width: 1100px) {
-  body { overflow: auto; }
-  .hud { height: auto; min-height: 100vh; grid-template-columns: 1fr; }
-  .center { min-height: 62vh; }
-  .left, .right { order: 3; } .bottom { grid-template-columns: 1fr; order: 2; }
-  .gauges { display: none; }
+/* lists & forms */
+.sect { margin: 0 0 24px; }
+.sect h3 { margin: 0 0 10px; font: 600 11px var(--display); letter-spacing: .26em; color: var(--dim); text-transform: uppercase; }
+.card { border: 1px solid var(--line); border-radius: 16px; background: rgba(255, 255, 255, .025); }
+.row { display: flex; align-items: center; gap: 14px; padding: 13px 16px; }
+.card .row + .row { border-top: 1px solid var(--line); }
+.row .lbl { flex: 1; min-width: 0; }
+.row .lbl small { display: block; color: var(--faint); font-size: 12.5px; }
+.field { width: 240px; max-width: 46%; padding: 9px 12px; border-radius: 11px; border: 1px solid var(--line-hi);
+  background: rgba(0, 0, 0, .3); outline: 0; transition: .2s; }
+.field:focus { border-color: rgba(var(--accent-rgb), .6); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .1); }
+select.field option { background: #071522; }
+.range { display: flex; align-items: center; gap: 10px; width: 260px; max-width: 50%; }
+.range input { flex: 1; accent-color: var(--accent); }
+.range output { width: 44px; text-align: right; font: 600 13px var(--display); color: var(--accent); }
+.switch { width: 46px; height: 26px; border-radius: 99px; border: 1px solid var(--line-hi); background: rgba(255, 255, 255, .06);
+  position: relative; flex: none; transition: .25s; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--dim); transition: .25s; }
+.switch.on { background: rgba(var(--accent-rgb), .35); border-color: rgba(var(--accent-rgb), .7); }
+.switch.on::after { left: 23px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+.voices { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.voice { text-align: left; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: rgba(255, 255, 255, .025); transition: .2s; }
+.voice:hover { border-color: var(--line-hi); }
+.voice.on { border-color: rgba(var(--accent-rgb), .6); background: rgba(var(--accent-rgb), .1); box-shadow: 0 0 18px rgba(var(--accent-rgb), .15); }
+.voice b { display: block; font-weight: 600; }
+.voice span { color: var(--dim); font-size: 12.5px; }
+.mem { display: flex; align-items: flex-start; gap: 10px; padding: 11px 14px; }
+.card .mem + .mem { border-top: 1px solid var(--line); }
+.mem .t { flex: 1; outline: 0; border-radius: 8px; padding: 2px 4px; margin: -2px -4px; }
+.mem .t:focus { background: rgba(0, 0, 0, .3); box-shadow: 0 0 0 1px rgba(var(--accent-rgb), .5); }
+.mem small { color: var(--faint); font-size: 11.5px; white-space: nowrap; padding-top: 2px; }
+.mem .del { border: 0; background: transparent; color: var(--faint); font-size: 18px; line-height: 1; padding: 0 2px; }
+.mem .del:hover { color: var(--bad); }
+.add { display: flex; gap: 8px; margin-top: 10px; }
+.add input { flex: 1; max-width: none; width: auto; }
+textarea.field { width: 100%; max-width: none; min-height: 120px; resize: vertical; }
+.steps { margin: 0 0 12px; padding-left: 20px; color: var(--dim); }
+.steps li { margin: 4px 0; }
+.quote { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; background: rgba(0, 0, 0, .3);
+  border: 1px dashed var(--line-hi); font-size: 13.5px; margin: 6px 0 12px; }
+.quote span { flex: 1; }
+code, .mono { font: 500 13px ui-monospace, Consolas, monospace; color: var(--accent); }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.note { color: var(--faint); font-size: 12.5px; margin-top: 10px; }
+
+/* state tints */
+body[data-state="pensando"] .jarvis { opacity: .55; }
+body.bg .main, body.bg .rail { opacity: .25; filter: grayscale(.6); transition: .6s; }
+.sleep { position: fixed; inset: 0; z-index: 30; display: none; place-items: center; text-align: center; background: rgba(1, 4, 9, .72); backdrop-filter: blur(6px); }
+body.bg .sleep { display: grid; }
+.sleep h3 { font: 600 14px var(--display); letter-spacing: .34em; color: var(--accent); margin: 0 0 8px; }
+.sleep p { color: var(--dim); margin: 0 0 18px; }
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+  .rail { order: 2; flex-direction: row; justify-content: space-around; margin: 0 10px 10px; padding: 6px; border-radius: 20px; }
+  .rail .logo, .rail .spacer, .nav .tip { display: none; }
+  .top { padding: 14px 16px 0; flex-wrap: wrap; }
+  .gauges, .brand { display: none; }
+  .view { inset: 70px 12px 8px 12px; }
+  .jarvis { font-size: 19px; }
+  .field { max-width: 55%; }
+  .range { width: 160px; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .logo svg { animation: none; } .subtitles .w { animation-duration: .01s; }
-}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
-<body class="boot" data-state="arrancando">
+<body data-state="arrancando">
 <canvas id="scene"></canvas>
 <canvas id="fallback"></canvas>
-<div class="scan"></div><div class="vignette"></div>
-<div class="flash" id="flash"></div>
 
-<div class="bootscreen" id="boot"><div><pre id="bootlog"></pre><div class="bar"><i id="bootbar"></i></div></div></div>
+<div class="app">
+  <nav class="rail" aria-label="Apartados">
+    <div class="logo" title="J.A.R.V.I.S."></div>
+    <button class="nav on" data-view="home" aria-label="Inicio">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8.5" stroke-dasharray="3 2.4"/></svg><span class="tip">Inicio</span></button>
+    <button class="nav" data-view="chat" aria-label="Conversación">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A1.5 1.5 0 0 1 4 14.5z"/></svg><span class="tip">Conversación</span></button>
+    <button class="nav" data-view="memory" aria-label="Memoria">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 4.5a3 3 0 0 0-3 3 3 3 0 0 0-2 5.2A3.2 3.2 0 0 0 7.5 18 2.8 2.8 0 0 0 12 19.5V5.6A3 3 0 0 0 9 4.5zM15 4.5a3 3 0 0 1 3 3 3 3 0 0 1 2 5.2A3.2 3.2 0 0 1 16.5 18 2.8 2.8 0 0 1 12 19.5"/></svg><span class="tip">Memoria</span></button>
+    <button class="nav" data-view="settings" aria-label="Ajustes">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span class="tip">Ajustes</span></button>
+    <button class="nav" data-view="remote" aria-label="Remoto">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="5" width="13" height="10" rx="1.5"/><path d="M1.5 18h16"/><rect x="18" y="8" width="4.5" height="10" rx="1"/></svg><span class="tip">Usar desde el Chromebook</span></button>
+    <div class="spacer"></div>
+    <button class="nav" id="b-mic" aria-label="Micrófono">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg><span class="tip">Micrófono encendido</span></button>
+    <button class="nav danger" id="b-power" aria-label="Apagar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3.5V11"/><path d="M6.8 6.8a7.5 7.5 0 1 0 10.4 0"/></svg><span class="tip">Apagar (segundo plano)</span></button>
+  </nav>
 
-<div class="hud">
-  <header class="top">
-    <div class="brand">
-      <div class="logo"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="21" stroke="var(--accent)" stroke-width="1.5" fill="none" stroke-dasharray="20 6 4 6"/><circle cx="24" cy="24" r="13" stroke="var(--accent)" stroke-width="2" fill="none" stroke-dasharray="3 3"/><circle cx="24" cy="24" r="5" fill="var(--accent)"/></svg></div>
-      <div><h1>J.A.R.V.I.S.</h1><div class="ticker" id="ticker"></div></div>
+  <main class="main">
+    <div class="top">
+      <div class="brand">J<b>.</b>A<b>.</b>R<b>.</b>V<b>.</b>I<b>.</b>S<b>.</b></div>
+      <span class="pill"><span class="dot"></span><span id="state">INICIANDO</span></span>
+      <span class="pill remote-badge">CONECTADO A TU PC</span>
+      <div class="grow"></div>
+      <span class="chip hidden" id="weather">☁ <strong id="w-t"></strong><span id="w-c"></span></span>
+      <div class="gauges">
+        <div class="gauge"><div class="k"><span>CPU</span><span id="v-cpu">–</span></div><div class="bar"><i id="g-cpu"></i></div></div>
+        <div class="gauge"><div class="k"><span>RAM</span><span id="v-ram">–</span></div><div class="bar"><i id="g-ram"></i></div></div>
+        <div class="gauge"><div class="k"><span id="l-bat">BAT</span><span id="v-bat">–</span></div><div class="bar"><i id="g-bat"></i></div></div>
+      </div>
+      <div class="chip"><span class="clock" id="clock">--:--</span><span id="date"></span></div>
     </div>
-    <div class="clock"><div class="t" id="clock">--:--<small>--</small></div><div class="d" id="date"></div></div>
-    <div class="gauges">
-      <div class="gauge" title="Procesador"><svg viewBox="0 0 54 54"><circle class="bg" cx="27" cy="27" r="22"/><circle class="fg" id="g-cpu" cx="27" cy="27" r="22"/></svg><div class="val" id="v-cpu">–</div><div class="lbl">CPU</div></div>
-      <div class="gauge" title="Memoria"><svg viewBox="0 0 54 54"><circle class="bg" cx="27" cy="27" r="22"/><circle class="fg" id="g-ram" cx="27" cy="27" r="22"/></svg><div class="val" id="v-ram">–</div><div class="lbl">RAM</div></div>
-      <div class="gauge" title="Batería"><svg viewBox="0 0 54 54"><circle class="bg" cx="27" cy="27" r="22"/><circle class="fg" id="g-bat" cx="27" cy="27" r="22"/></svg><div class="val" id="v-bat">–</div><div class="lbl" id="l-bat">BAT</div></div>
-      <div class="weather"><div class="tmp" id="w-t"></div><div class="cond" id="w-c"></div></div>
-    </div>
-  </header>
 
-  <aside class="left">
-    <section class="panel grow"><h2>Agenda <span class="n" id="n-agenda"></span></h2><ul class="timeline scroll" id="agenda"></ul></section>
-    <section class="panel grow"><h2>Bandeja <span class="n" id="n-inbox"></span></h2><ul class="inbox scroll" id="inbox"></ul></section>
-  </aside>
+    <!-- INICIO -->
+    <section class="view on" id="v-home">
+      <div class="activity" id="activity"></div>
+      <div class="confirm" id="confirm">
+        <h4>NECESITO SU CONFIRMACIÓN</h4>
+        <p id="confirm-q"></p>
+        <div class="row"><button class="btn" data-reply="No">No</button><button class="btn warn" data-reply="Sí">Sí, adelante</button></div>
+      </div>
+      <div class="cam" id="cam"><video id="camvideo" autoplay playsinline muted></video><div class="flash" id="camshot"></div><button class="x" id="camclose" aria-label="Cerrar cámara">✕</button></div>
+      <div class="stage">
+        <div class="subs">
+          <div class="you" id="you"></div>
+          <div class="jarvis" id="jarvis"></div>
+        </div>
+        <div class="hint" id="hint"></div>
+        <div class="timing" id="timing"></div>
+        <div class="chips">
+          <button class="qa" data-ask="¿Qué tengo hoy?">¿Qué tengo hoy?</button>
+          <button class="qa" data-ask="Mira mi pantalla y dime qué ves">Mira mi pantalla</button>
+          <button class="qa" data-ask="Ponme mi canción favorita">Mi canción favorita</button>
+          <button class="qa" id="b-cam">Cámara</button>
+          <button class="qa" id="b-screen">Ver pantalla siempre</button>
+        </div>
+        <form class="ask" id="askform" autocomplete="off">
+          <input id="askinput" placeholder="Escribe o simplemente habla…" aria-label="Pregunta a Jarvis">
+          <span class="kbd">Ctrl K</span>
+          <button type="button" class="ib" id="b-talk" title="Hablar (Espacio)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg></button>
+          <button class="ib primary" title="Enviar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>
+        </form>
+      </div>
+    </section>
 
-  <main class="center">
-    <div class="state" id="state">INICIANDO</div>
-    <div class="sub" id="sub"></div>
-    <div class="moodtag" id="moodtag" hidden><i></i><span id="moodname"></span></div>
-    <div class="watchtag"><i></i>VIENDO TU PANTALLA</div>
-    <div class="subtitles" id="subs" aria-live="polite"></div>
-    <div class="timing" id="timing" hidden></div>
+    <!-- CONVERSACIÓN -->
+    <section class="view" id="v-chat"><div class="panel">
+      <header><h2>CONVERSACIÓN</h2><p>Lo que habéis hablado. Jarvis lo recuerda entre sesiones.</p></header>
+      <div class="body"><div class="msgs" id="msgs"><div class="empty">Aún no habéis hablado.</div></div></div>
+    </div></section>
+
+    <!-- MEMORIA -->
+    <section class="view" id="v-memory"><div class="panel">
+      <header><h2>MEMORIA</h2><p>Lo que Jarvis sabe de ti. Lo usa para personalizar todo («pon mi canción favorita»). Haz clic en un recuerdo para editarlo.</p></header>
+      <div class="body">
+        <div class="sect">
+          <h3>Recuerdos</h3>
+          <div class="card" id="memlist"></div>
+          <form class="add" id="memadd" autocomplete="off"><input class="field" id="memtext" placeholder="Ej.: Mi canción favorita es Bohemian Rhapsody, de Queen"><button class="btn go">Añadir</button></form>
+        </div>
+        <div class="sect">
+          <h3>Traer lo que otra IA sabe de ti</h3>
+          <ol class="steps">
+            <li>Abre ChatGPT, Gemini o Claude y escríbele esto:</li>
+          </ol>
+          <div class="quote"><span id="importprompt">Haz una lista con todo lo que recuerdas de mí: datos personales, gustos, trabajo, personas importantes, objetivos y cómo me gusta que me hablen.</span><button class="btn" id="b-copy">Copiar</button></div>
+          <ol class="steps" start="2"><li>Pega aquí su respuesta y pulsa Importar.</li></ol>
+          <textarea class="field" id="importtext" placeholder="Pega aquí la respuesta de la otra IA…"></textarea>
+          <div class="actions" style="margin-top:10px"><button class="btn go" id="b-import">Importar</button></div>
+        </div>
+      </div>
+    </div></section>
+
+    <!-- AJUSTES -->
+    <section class="view" id="v-settings"><div class="panel">
+      <header><h2>AJUSTES</h2><p>Todo se guarda al momento.</p></header>
+      <div class="body">
+        <div class="sect"><h3>Voz</h3><div class="voices" id="voices"></div><p class="note">Toca una voz para escucharla. Las «multilingües» son las más naturales.</p></div>
+        <div id="settings"></div>
+        <div class="sect"><h3>Aplicación</h3><div class="card">
+          <div class="row"><div class="lbl">Arrancar con Windows<small>Se inicia oculto y se despierta con palmadas o «Jarvis, enciéndete».</small></div><button class="switch" id="sw-autostart" aria-label="Arrancar con Windows"></button></div>
+          <div class="row"><div class="lbl">Borrar la conversación<small>Jarvis olvida lo hablado. Los recuerdos de Memoria se mantienen.</small></div><button class="btn bad" id="b-forget">Borrar</button></div>
+          <div class="row"><div class="lbl">Actualizar Jarvis<small id="version">Descarga la última versión y se reinicia solo.</small></div><button class="btn" id="b-update">Actualizar</button></div>
+          <div class="row"><div class="lbl">Cerrar Jarvis del todo<small>Deja de escuchar las palmadas hasta que lo vuelvas a abrir.</small></div><button class="btn bad" id="b-quit">Salir</button></div>
+        </div></div>
+      </div>
+    </div></section>
+
+    <!-- REMOTO -->
+    <section class="view" id="v-remote"><div class="panel">
+      <header><h2>USAR DESDE EL CHROMEBOOK</h2><p>El Chromebook abre Jarvis en Chrome y habla con el Jarvis de este PC (el PC tiene que estar encendido y en la misma wifi).</p></header>
+      <div class="body">
+        <div class="sect"><h3>1 · Activar</h3><div class="card" id="remoteset"></div><p class="note">Al activarlo o cambiar el PIN, cierra Jarvis y vuelve a abrirlo.</p></div>
+        <div class="sect"><h3>2 · En el Chromebook</h3>
+          <ol class="steps">
+            <li>Abre Chrome y entra en <span class="mono" id="r-url">—</span></li>
+            <li>Escribe el PIN.</li>
+            <li>Para hablarle con la voz (no solo escribir): entra en <span class="mono">chrome://flags/#unsafely-treat-insecure-origin-as-secure</span>, pega la dirección de arriba, ponlo en <b>Enabled</b> y pulsa <b>Relaunch</b>. Chrome solo deja usar el micrófono en direcciones seguras, y así le dices que confías en tu PC.</li>
+          </ol>
+          <p class="note">Desde el Chromebook puedes hablarle y oírle, y Jarvis actúa en tu PC. No puede tocar los ajustes del Chromebook.</p>
+        </div>
+      </div>
+    </div></section>
   </main>
-
-  <aside class="right">
-    <section class="panel"><h2><span id="m-title">Métricas</span> <span class="n" id="m-time"></span></h2><div class="metrics" id="metrics"></div></section>
-    <section class="panel"><h2>Temporizadores <span class="n" id="n-timers"></span></h2><div class="timers" id="timers"></div>
-      <div class="chipline"><button class="chip" data-timer="60">1 min</button><button class="chip" data-timer="300">5 min</button><button class="chip" data-timer="1500">Pomodoro 25</button></div></section>
-    <section class="panel grow"><h2>Notas <span class="n" id="n-notes"></span></h2><ul class="notes scroll" id="notes"></ul>
-      <form class="noteadd" id="noteform"><input class="field" id="noteinput" placeholder="Apuntar algo…" aria-label="Nueva nota" autocomplete="off"><button class="btn" type="submit">+</button></form></section>
-  </aside>
-
-  <footer class="bottom">
-    <div class="chips" id="chips">
-      <button class="chip" data-act="briefing">Briefing</button>
-      <button class="chip" data-ask="¿Qué tengo hoy en la agenda?">Mi día</button>
-      <button class="chip" data-ask="Resúmeme lo importante del correo">Correo</button>
-      <button class="chip" data-ask="Cuéntame algo fascinante que no sepa">Sorpréndeme</button>
-      <button class="chip" data-ask="¿Cómo van mis métricas? Dame tu análisis">Análisis</button>
-    </div>
-    <button class="mic" id="mic" title="Hablar (mantén Espacio)" aria-label="Hablar con Jarvis"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg></button>
-    <div class="tools">
-      <form class="ask" id="askform"><input id="askinput" placeholder="Escribe a Jarvis…   Ctrl+K comandos" aria-label="Escribe a Jarvis" autocomplete="off"></form>
-      <button class="ibtn" id="b-hist" title="Conversación (C)" aria-label="Conversación"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg></button>
-      <button class="ibtn" id="b-voice" title="Voz y ajustes (V)" aria-label="Voz y ajustes"><svg viewBox="0 0 24 24"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg></button>
-      <button class="ibtn" id="b-screen" title="Ver mi pantalla en tiempo real (M)" aria-label="Ver mi pantalla"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="1"/><path d="M8 20h8M12 16v4"/></svg></button>
-      <button class="ibtn" id="b-cam" title="Cámara" aria-label="Cámara"><svg viewBox="0 0 24 24"><path d="M3 7h4l2-3h6l2 3h4v12H3z"/><circle cx="12" cy="13" r="4"/></svg></button>
-      <button class="ibtn" id="b-cine" title="Modo cine (H)" aria-label="Modo cine"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 9h18M3 15h18"/></svg></button>
-      <button class="ibtn" id="b-full" title="Pantalla completa (F)" aria-label="Pantalla completa"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
-    </div>
-  </footer>
 </div>
 
-<aside class="drawer" id="d-hist" aria-label="Conversación">
-  <h3>Conversación <button class="x" data-close="d-hist" aria-label="Cerrar">✕</button></h3>
-  <div class="chat" id="chat"></div>
-  <form class="ask" id="askform2" style="max-width:none"><input id="askinput2" placeholder="Escribe una conversación larga con Jarvis…" autocomplete="off"></form>
-</aside>
-
-<aside class="drawer" id="d-voice" aria-label="Voz y ajustes">
-  <h3>Voz <button class="x" data-close="d-voice" aria-label="Cerrar">✕</button></h3>
-  <div class="voices" id="voices"></div>
-  <button class="btn ghost" id="b-test">Probar voz</button>
-  <h3 style="margin-top:8px">Ajustes</h3>
-  <div class="row">Micrófono siempre a la escucha <div class="switch on" id="sw-mic" role="switch" aria-checked="true" tabindex="0"></div></div>
-  <div class="row">Efectos de sonido <div class="switch on" id="sw-fx" role="switch" aria-checked="true" tabindex="0"></div></div>
-  <div class="row">Color según la emoción <div class="switch on" id="sw-mood" role="switch" aria-checked="true" tabindex="0"></div></div>
-  <div class="row">Memoria de conversación <button class="btn ghost" id="b-forget">Borrar</button></div>
-  <div class="row" style="color:var(--muted);font-size:12px;line-height:1.6">Atajos: <span><kbd>Espacio</kbd> hablar · <kbd>Esc</kbd> parar · <kbd>Ctrl</kbd>+<kbd>K</kbd> comandos · <kbd>H</kbd> cine · <kbd>F</kbd> pantalla</span></div>
-</aside>
-
-<div class="palette" id="palette"><div class="box" role="dialog" aria-label="Comandos">
-  <input id="pal-in" placeholder="¿Qué quieres hacer?" autocomplete="off"><ul id="pal-list"></ul>
-</div></div>
-<div class="toast" id="toast" role="status"></div>
-<div class="cam" id="cam" aria-label="Cámara"><video id="camvideo" autoplay playsinline muted></video><div class="tag"><i></i>CÁMARA EN DIRECTO</div><div class="shot" id="camshot"></div><button class="x close" id="camclose" aria-label="Apagar cámara">✕</button></div>
+<div class="sleep"><div><h3>EN SEGUNDO PLANO</h3><p>Dos palmadas o «Jarvis, enciéndete» para despertarlo.</p><button class="btn go" id="b-wake">Despertar ahora</button></div></div>
+<div class="toast" id="toast"></div>
 
 <script src="three.min.js"></script>
 <script>
@@ -359,516 +408,371 @@ body.mini .tools { gap: 6px; }
   "use strict";
   const $ = (id) => document.getElementById(id);
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const MOODS = {
-    neutral:    { c: [41, 231, 255],  n: "NEUTRO" },
-    alegre:     { c: [255, 204, 64],  n: "ALEGRE" },
-    entusiasta: { c: [255, 72, 196],  n: "ENTUSIASTA" },
-    bromista:   { c: [150, 255, 90],  n: "BROMISTA" },
-    sereno:     { c: [80, 255, 200],  n: "SERENO" },
-    serio:      { c: [90, 130, 255],  n: "SERIO" },
-    empatico:   { c: [190, 140, 255], n: "EMPÁTICO" },
-    sorprendido:{ c: [255, 140, 60],  n: "SORPRENDIDO" },
-    pensando:   { c: [255, 180, 60],  n: "" },
-    error:      { c: [255, 77, 106],  n: "" },
+    neutral: [41, 231, 255], alegre: [255, 204, 64], entusiasta: [255, 72, 196], bromista: [150, 255, 90],
+    sereno: [80, 255, 200], serio: [90, 130, 255], empatico: [190, 140, 255], sorprendido: [255, 140, 60],
+    escuchando: [77, 255, 176], error: [255, 77, 106],
   };
-  const STATE = { arrancando: "INICIANDO", reposo: "EN ESPERA", activando: "EN LÍNEA", pensando: "PROCESANDO",
-    hablando: "JARVIS", escuchando: "ESCUCHANDO", error: "FALLO" };
-  let state = "arrancando", mood = "neutral", moodColors = true, fx = true, micOn = true, continua = false;
+  const STATE = { arrancando: "INICIANDO", reposo: "EN LÍNEA", activando: "EN LÍNEA", pensando: "JARVIS",
+    hablando: "HABLANDO", escuchando: "ESCUCHANDO", error: "FALLO" };
+  let state = "arrancando", mood = "neutral", micOn = true, local = true, background = false;
   let voice = 0, mic = 0, burst = 0;
-  const target = { c: MOODS.neutral.c.slice() }, cur = { c: MOODS.neutral.c.slice() };
+  const target = MOODS.neutral.slice(), cur = MOODS.neutral.slice();
 
-  // ── sound effects (synthesised, no files) ─────────────────────
+  const post = (path, body) => fetch("/api/" + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
+    .then((r) => r.json()).catch(() => ({ ok: false }));
+  const result = (r) => (r && r.ok ? r.result : null);
+  function toast(t, ms = 5000) { const el = $("toast"); el.textContent = t; el.classList.add("on"); clearTimeout(toast.h); toast.h = setTimeout(() => el.classList.remove("on"), ms); }
+
+  // ── sound effects (synthesised) ───────────────────────────
   let ac = null;
   const audio = () => { try { ac = ac || new (window.AudioContext || window.webkitAudioContext)(); if (ac.state === "suspended") ac.resume(); } catch (_) {} return ac; };
-  function tone(freq, dur, type = "sine", gain = .08, when = 0, slide = 0) {
-    if (!fx) return; const a = audio(); if (!a) return;
-    const t = a.currentTime + when, o = a.createOscillator(), g = a.createGain();
-    o.type = type; o.frequency.setValueAtTime(freq, t); if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
-    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + .015); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
-    o.connect(g).connect(a.destination); o.start(t); o.stop(t + dur + .05);
+  function tone(f, d, type = "sine", g = .06, when = 0, slide = 0) {
+    const a = audio(); if (!a) return; const t = a.currentTime + when, o = a.createOscillator(), v = a.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + d);
+    v.gain.setValueAtTime(0, t); v.gain.linearRampToValueAtTime(g, t + .012); v.gain.exponentialRampToValueAtTime(.0001, t + d);
+    o.connect(v).connect(a.destination); o.start(t); o.stop(t + d + .05);
   }
   const sfx = {
-    click: () => tone(1400, .06, "square", .025),
-    open: () => { tone(500, .12, "sine", .05, 0, 900); },
-    wake: () => { tone(55, .9, "sine", .22, 0, 30); tone(220, .5, "sawtooth", .03, 0, 880); [523, 784, 1046, 1568].forEach((f, i) => tone(f, .5, "sine", .06, .08 + i * .07)); },
-    listen: () => { tone(880, .09, "sine", .06); tone(1320, .12, "sine", .05, .08); },
-    boot: () => { tone(80, 1.6, "sawtooth", .04, 0, 400); tone(1200, .3, "sine", .03, 1.4, 2400); },
-    alarm: () => { for (let i = 0; i < 6; i++) { tone(1046, .14, "square", .06, i * .32); tone(1568, .14, "square", .05, i * .32 + .16); } },
+    tap: () => tone(1500, .05, "sine", .02),
+    listen: () => { tone(880, .08, "sine", .045); tone(1320, .1, "sine", .04, .07); },
+    wake: () => { tone(60, .7, "sine", .18, 0, 34); [523, 784, 1046, 1568].forEach((f, i) => tone(f, .45, "sine", .05, .06 + i * .06)); },
+    done: () => { tone(1046, .09, "sine", .04); tone(1568, .14, "sine", .035, .08); },
+    alarm: () => { for (let i = 0; i < 6; i++) { tone(1046, .14, "square", .05, i * .32); tone(1568, .14, "square", .04, i * .32 + .16); } },
   };
 
-  // ── clock, ticker ─────────────────────────────────────────────
-  const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
-  const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-  function tickClock() {
-    const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  // ── clock ─────────────────────────────────────────────────
+  const dias = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+  const meses = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  function tick() { const d = new Date(), p = (n) => String(n).padStart(2, "0");
     $("clock").innerHTML = `${p(d.getHours())}:${p(d.getMinutes())}<small>${p(d.getSeconds())}</small>`;
-    $("date").textContent = `${dias[d.getDay()]} ${d.getDate()} de ${meses[d.getMonth()]}`;
-  }
-  tickClock(); setInterval(tickClock, 1000);
-  let tickerLines = ["Núcleo cuántico estable", "Enlace neuronal activo"], ti = 0;
-  function typeTicker(text) {
-    const el = $("ticker"); let i = 0; el.textContent = "";
-    const step = () => { el.textContent = text.slice(0, ++i).toUpperCase() + (i < text.length ? "▌" : ""); if (i < text.length) setTimeout(step, 28); };
-    step();
-  }
-  setInterval(() => { if (state === "reposo") typeTicker(tickerLines[ti++ % tickerLines.length]); }, 7000);
+    $("date").textContent = `${dias[d.getDay()]} ${d.getDate()} ${meses[d.getMonth()]}`; }
+  tick(); setInterval(tick, 1000);
 
-  // ── 3D holographic core ───────────────────────────────────────
-  const canvas = $("scene");
-  let three = null;
+  // ── holographic core (three.js) ───────────────────────────
+  const canvas = $("scene"); let three = null;
   function initThree() {
     if (!window.THREE) return false;
     try {
-      const T = THREE, renderer = new T.WebGLRenderer({ canvas, antialias: true, alpha: true });
+      const T = THREE, renderer = new T.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
       renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
-      const scene = new T.Scene(), camera = new T.PerspectiveCamera(42, 1, .1, 100);
-      camera.position.set(0, 0, 7.4);
+      const scene = new T.Scene(), camera = new T.PerspectiveCamera(40, 1, .1, 100); camera.position.set(0, 0, 7.6);
       const group = new T.Group(); scene.add(group);
-
-      // particle sphere
-      const N = 9000, pos = new Float32Array(N * 3), seed = new Float32Array(N);
-      const ga = Math.PI * (3 - Math.sqrt(5));
-      for (let i = 0; i < N; i++) {
-        const y = 1 - (i / (N - 1)) * 2, r = Math.sqrt(1 - y * y), th = ga * i;
-        pos[i * 3] = Math.cos(th) * r; pos[i * 3 + 1] = y; pos[i * 3 + 2] = Math.sin(th) * r; seed[i] = Math.random();
-      }
-      const geo = new T.BufferGeometry();
-      geo.setAttribute("position", new T.BufferAttribute(pos, 3));
-      geo.setAttribute("seed", new T.BufferAttribute(seed, 1));
-      const uni = { uTime: { value: 0 }, uLevel: { value: 0 }, uBurst: { value: 0 }, uColor: { value: new T.Color(0x29e7ff) },
-        uSwirl: { value: 0 }, uScale: { value: 1.45 }, uPix: { value: renderer.getPixelRatio() } };
+      const N = 14000, pos = new Float32Array(N * 3), seed = new Float32Array(N), ga = Math.PI * (3 - Math.sqrt(5));
+      for (let i = 0; i < N; i++) { const y = 1 - (i / (N - 1)) * 2, r = Math.sqrt(1 - y * y), th = ga * i;
+        pos[i * 3] = Math.cos(th) * r; pos[i * 3 + 1] = y; pos[i * 3 + 2] = Math.sin(th) * r; seed[i] = Math.random(); }
+      const geo = new T.BufferGeometry(); geo.setAttribute("position", new T.BufferAttribute(pos, 3)); geo.setAttribute("seed", new T.BufferAttribute(seed, 1));
+      const uni = { uTime: { value: 0 }, uLevel: { value: 0 }, uBurst: { value: 0 }, uColor: { value: new T.Color(0x29e7ff) }, uSwirl: { value: 0 }, uScale: { value: 1.3 }, uPix: { value: renderer.getPixelRatio() } };
       const mat = new T.ShaderMaterial({ uniforms: uni, transparent: true, depthWrite: false, blending: T.AdditiveBlending,
-        vertexShader: `
-          uniform float uTime, uLevel, uBurst, uSwirl, uScale, uPix; attribute float seed; varying float vA;
+        vertexShader: `uniform float uTime,uLevel,uBurst,uSwirl,uScale,uPix; attribute float seed; varying float vA; varying float vS;
           float n3(vec3 p){ return sin(p.x*2.7+uTime*1.1)*sin(p.y*3.1-uTime*.9)*sin(p.z*2.3+uTime*.7); }
-          void main(){
-            vec3 p = position;
-            float ang = uSwirl * (p.y*2.0) + uTime*0.05;
-            p.xz = mat2(cos(ang),-sin(ang),sin(ang),cos(ang)) * p.xz;
-            float n = n3(p*2.0 + seed);
-            float disp = n*(0.035 + uLevel*0.22) + uBurst*(1.2 + seed*2.5);
-            p *= uScale * (1.0 + disp);
-            vec4 mv = modelViewMatrix * vec4(p,1.0);
-            gl_Position = projectionMatrix * mv;
-            gl_PointSize = (1.8 + seed*2.4 + uLevel*2.5) * uPix * (7.0 / -mv.z);
-            vA = 0.55 + 0.45*seed;
-            vA *= 0.3 + 0.7*smoothstep(-9.6, -5.6, mv.z);  // back of the sphere dimmer
-          }`,
-        fragmentShader: `
-          uniform vec3 uColor; varying float vA;
-          void main(){ float d = length(gl_PointCoord-0.5); if(d>0.5) discard;
-            float a = pow(smoothstep(0.5,0.0,d), 1.4) * vA; gl_FragColor = vec4(mix(uColor, vec3(1.0), 0.35*a), a*0.95); }`,
-      });
-      const sphere = new T.Points(geo, mat); group.add(sphere);
-
-      // glowing core
-      const gc = document.createElement("canvas"); gc.width = gc.height = 256;
-      const gx = gc.getContext("2d"), gr = gx.createRadialGradient(128, 128, 0, 128, 128, 128);
-      gr.addColorStop(0, "rgba(255,255,255,1)"); gr.addColorStop(.2, "rgba(255,255,255,.55)"); gr.addColorStop(.5, "rgba(255,255,255,.12)"); gr.addColorStop(1, "rgba(255,255,255,0)");
+          void main(){ vec3 p=position; float ang=uSwirl*(p.y*2.0)+uTime*0.06; p.xz=mat2(cos(ang),-sin(ang),sin(ang),cos(ang))*p.xz;
+            float n=n3(p*2.0+seed); float wave=sin(p.y*10.0-uTime*6.0)*uLevel*0.06;
+            float disp=n*(0.03+uLevel*0.26)+wave+uBurst*(1.1+seed*2.4); p*=uScale*(1.0+disp);
+            vec4 mv=modelViewMatrix*vec4(p,1.0); gl_Position=projectionMatrix*mv;
+            gl_PointSize=(1.5+seed*2.2+uLevel*2.8)*uPix*(7.0/-mv.z); vS=seed;
+            vA=(0.5+0.5*seed)*(0.25+0.75*smoothstep(-9.8,-5.8,mv.z)); }`,
+        fragmentShader: `uniform vec3 uColor; varying float vA; varying float vS;
+          void main(){ float d=length(gl_PointCoord-0.5); if(d>0.5) discard; float a=pow(smoothstep(0.5,0.0,d),1.5)*vA;
+            vec3 c=mix(uColor,vec3(1.0),0.28*a+0.15*step(0.97,vS)); gl_FragColor=vec4(c,a*0.95); }` });
+      group.add(new T.Points(geo, mat));
+      const gc = document.createElement("canvas"); gc.width = gc.height = 256; const gx = gc.getContext("2d"), gr = gx.createRadialGradient(128, 128, 0, 128, 128, 128);
+      gr.addColorStop(0, "rgba(255,255,255,1)"); gr.addColorStop(.18, "rgba(255,255,255,.6)"); gr.addColorStop(.5, "rgba(255,255,255,.12)"); gr.addColorStop(1, "rgba(255,255,255,0)");
       gx.fillStyle = gr; gx.fillRect(0, 0, 256, 256);
-      const glowTex = new T.CanvasTexture(gc);
-      const core = new T.Sprite(new T.SpriteMaterial({ map: glowTex, color: 0x29e7ff, blending: T.AdditiveBlending, depthWrite: false, transparent: true }));
-      core.scale.set(2.2, 2.2, 1); group.add(core);
-
-      // orbit rings
+      const core = new T.Sprite(new T.SpriteMaterial({ map: new T.CanvasTexture(gc), color: 0x29e7ff, blending: T.AdditiveBlending, depthWrite: false, transparent: true }));
+      core.scale.set(2, 2, 1); group.add(core);
       const rings = [];
-      [[1.95, 1.25, 0.15, 140, .6], [2.2, 1.45, -0.35, 72, .4], [2.5, 1.1, 0.5, 200, .25]].forEach(([r, rx, rz, seg, op]) => {
+      [[1.9, 1.3, .15, 160, .55], [2.15, 1.45, -.35, 80, .38], [2.45, 1.1, .5, 220, .22], [1.68, 1.57, 0, 120, .3]].forEach(([r, rx, rz, seg, op]) => {
         const pts = []; for (let i = 0; i < seg; i++) { if (i % 3 === 2) continue; const a0 = i / seg * Math.PI * 2, a1 = (i + .6) / seg * Math.PI * 2;
           pts.push(new T.Vector3(Math.cos(a0) * r, Math.sin(a0) * r, 0), new T.Vector3(Math.cos(a1) * r, Math.sin(a1) * r, 0)); }
-        const g = new T.BufferGeometry().setFromPoints(pts);
-        const l = new T.LineSegments(g, new T.LineBasicMaterial({ color: 0x29e7ff, transparent: true, opacity: op, blending: T.AdditiveBlending }));
-        l.rotation.x = rx; l.rotation.z = rz; l.userData.base = op; group.add(l); rings.push(l);
-      });
-
-      // dust field
-      const D = 1600, dp = new Float32Array(D * 3);
-      for (let i = 0; i < D; i++) { const r = 4 + Math.random() * 14, a = Math.random() * Math.PI * 2, b = Math.acos(2 * Math.random() - 1);
+        const l = new T.LineSegments(new T.BufferGeometry().setFromPoints(pts), new T.LineBasicMaterial({ color: 0x29e7ff, transparent: true, opacity: op, blending: T.AdditiveBlending }));
+        l.rotation.x = rx; l.rotation.z = rz; l.userData.base = op; group.add(l); rings.push(l); });
+      const D = 2200, dp = new Float32Array(D * 3);
+      for (let i = 0; i < D; i++) { const r = 4 + Math.random() * 16, a = Math.random() * 6.283, b = Math.acos(2 * Math.random() - 1);
         dp[i * 3] = r * Math.sin(b) * Math.cos(a); dp[i * 3 + 1] = r * Math.cos(b); dp[i * 3 + 2] = r * Math.sin(b) * Math.sin(a) - 6; }
       const dg = new T.BufferGeometry(); dg.setAttribute("position", new T.BufferAttribute(dp, 3));
-      const dust = new T.Points(dg, new T.PointsMaterial({ color: 0x29e7ff, size: .035, transparent: true, opacity: .55, blending: T.AdditiveBlending, depthWrite: false }));
-      scene.add(dust);
-
-      // shockwaves
+      const dust = new T.Points(dg, new T.PointsMaterial({ color: 0x29e7ff, size: .03, transparent: true, opacity: .5, blending: T.AdditiveBlending, depthWrite: false })); scene.add(dust);
       const waves = [];
-      function shock() {
-        const g = new T.RingGeometry(1, 1.04, 128), m = new T.MeshBasicMaterial({ color: uni.uColor.value.clone(), transparent: true, opacity: .9, blending: T.AdditiveBlending, side: T.DoubleSide, depthWrite: false });
-        const w = new T.Mesh(g, m); w.userData.t = 0; scene.add(w); waves.push(w);
-      }
-
-      let mx = 0, my = 0;
-      addEventListener("pointermove", (e) => { mx = e.clientX / innerWidth - .5; my = e.clientY / innerHeight - .5; });
-      function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+      const shock = () => { const w = new T.Mesh(new T.RingGeometry(1, 1.035, 128), new T.MeshBasicMaterial({ color: uni.uColor.value.clone(), transparent: true, opacity: .9, blending: T.AdditiveBlending, side: T.DoubleSide, depthWrite: false })); w.userData.t = 0; scene.add(w); waves.push(w); };
+      let mx = 0, my = 0; addEventListener("pointermove", (e) => { mx = e.clientX / innerWidth - .5; my = e.clientY / innerHeight - .5; });
+      const resize = () => { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); };
       addEventListener("resize", resize); resize();
-
-      const raycaster = new T.Raycaster(), ndc = new T.Vector2();
-      const hitCore = (e) => { ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1); raycaster.setFromCamera(ndc, camera);
-        return raycaster.ray.distanceToPoint(new T.Vector3(0, .75, 0)) < 1.6; };
-
-      let last = performance.now(), swirl = 0, level = 0, scale = 1.45, energy = 0;
+      let last = performance.now(), swirl = 0, level = 0, scale = 1.1, energy = 0;
       function frame(now) {
-        const dt = Math.min(.05, (now - last) / 1000); last = now;
-        const t = now / 1000;
-        const lvlTarget = state === "hablando" ? voice : state === "escuchando" ? mic * .9 : mic * .25;
-        level += (lvlTarget - level) * .25;
-        const swirlTarget = state === "pensando" ? 2.4 : state === "activando" ? 1.2 : 0;
-        swirl += (swirlTarget - swirl) * .03;
-        const scaleTarget = state === "reposo" || state === "arrancando" ? 1.05 : 1.2;
-        scale += (scaleTarget - scale) * .05 + burst * .0;
-        energy += ((state === "reposo" ? .4 : 1) - energy) * .04;
-        uni.uTime.value = t; uni.uLevel.value = level; uni.uSwirl.value = swirl; uni.uScale.value = scale; uni.uBurst.value = burst * burst;
-        burst *= .93;
-        for (let i = 0; i < 3; i++) cur.c[i] += (target.c[i] - cur.c[i]) * .05;
-        const col = new T.Color(cur.c[0] / 255, cur.c[1] / 255, cur.c[2] / 255);
-        uni.uColor.value.copy(col); core.material.color.copy(col);
-        rings.forEach((r) => { r.material.color.copy(col); r.material.opacity = r.userData.base * (.5 + energy * .7); });
-        dust.material.color.copy(col);
+        const dt = Math.min(.05, (now - last) / 1000); last = now; const t = now / 1000;
+        const lv = state === "hablando" ? voice : state === "escuchando" ? .25 + mic * .9 : mic * .2;
+        level += (lv - level) * .22;
+        swirl += ((state === "pensando" ? 2.2 : state === "activando" ? 1.1 : 0) - swirl) * .05;
+        scale += ((state === "reposo" || state === "arrancando" ? 1.05 : 1.17) - scale) * .06;
+        energy += ((state === "reposo" ? .45 : 1) - energy) * .05;
+        uni.uTime.value = t; uni.uLevel.value = level; uni.uSwirl.value = swirl; uni.uScale.value = scale; uni.uBurst.value = burst * burst; burst *= .92;
+        for (let i = 0; i < 3; i++) cur[i] += (target[i] - cur[i]) * .06;
+        const col = new T.Color(cur[0] / 255, cur[1] / 255, cur[2] / 255);
+        uni.uColor.value.copy(col); core.material.color.copy(col); dust.material.color.copy(col);
+        rings.forEach((r) => { r.material.color.copy(col); r.material.opacity = r.userData.base * (.45 + energy * .7); });
         const spd = reduce ? 0 : 1;
-        group.rotation.y += dt * (.12 + swirl * .5) * spd;
-        rings[0].rotation.z += dt * (.4 + swirl) * spd; rings[1].rotation.z -= dt * (.25 + swirl * .8) * spd; rings[2].rotation.y += dt * .12 * spd;
-        dust.rotation.y += dt * .01 * spd;
-        const cs = (state === "reposo" ? 1.4 : 1.9) + level * 1.6 + burst * 3 + Math.sin(t * 2) * .08;
-        core.scale.set(cs, cs, 1); core.material.opacity = .55 + energy * .35 + level * .3;
-        camera.position.x += (mx * 1.2 - camera.position.x) * .04; camera.position.y += (-my * .8 + .25 - camera.position.y) * .04;
-        camera.lookAt(0, .2, 0);
-        group.position.y = .75;
+        group.rotation.y += dt * (.1 + swirl * .5) * spd;
+        rings[0].rotation.z += dt * (.35 + swirl) * spd; rings[1].rotation.z -= dt * (.22 + swirl * .8) * spd; rings[2].rotation.y += dt * .1 * spd; rings[3].rotation.y -= dt * (.3 + level) * spd;
+        dust.rotation.y += dt * .012 * spd;
+        const cs = (state === "reposo" ? 1.3 : 1.8) + level * 1.7 + burst * 3 + Math.sin(t * 2.2) * .07;
+        core.scale.set(cs, cs, 1); core.material.opacity = .5 + energy * .35 + level * .3;
+        camera.position.x += (mx * 1.1 - camera.position.x) * .04; camera.position.y += (-my * .7 + .2 - camera.position.y) * .04; camera.lookAt(0, .35, 0);
+        group.position.y = .62;
         for (let i = waves.length - 1; i >= 0; i--) { const w = waves[i]; w.userData.t += dt; const k = w.userData.t;
-          w.scale.setScalar(1.5 + k * 9); w.material.opacity = Math.max(0, .9 - k * .9); w.position.y = .75; w.lookAt(camera.position);
+          w.scale.setScalar(1.4 + k * 9); w.material.opacity = Math.max(0, .9 - k * .9); w.position.y = .62; w.lookAt(camera.position);
           if (k > 1.1) { scene.remove(w); w.geometry.dispose(); w.material.dispose(); waves.splice(i, 1); } }
-        renderer.render(scene, camera);
-        voice *= .88; mic *= .85;
-        requestAnimationFrame(frame);
+        renderer.render(scene, camera); voice *= .86; mic *= .85; requestAnimationFrame(frame);
       }
-      requestAnimationFrame(frame);
-      three = { shock, hitCore };
-      return true;
+      requestAnimationFrame(frame); three = { shock }; return true;
     } catch (e) { console.warn("WebGL no disponible", e); return false; }
   }
-
-  // 2D fallback when WebGL / three.js is unavailable
   function initFallback() {
-    const c = $("fallback"); c.style.display = "block"; canvas.style.display = "none";
-    const x = c.getContext("2d");
-    function draw(t) {
-      const w = c.width = innerWidth, h = c.height = innerHeight, cx = w / 2, cy = h * .42, R = Math.min(w, h) * .22;
-      const col = cur.c.map(Math.round).join(",");
-      for (let i = 0; i < 3; i++) cur.c[i] += (target.c[i] - cur.c[i]) * .05;
-      const lv = state === "hablando" ? voice : mic;
-      const g = x.createRadialGradient(cx, cy, 0, cx, cy, R * (1.3 + lv));
-      g.addColorStop(0, `rgba(255,255,255,.9)`); g.addColorStop(.2, `rgba(${col},.7)`); g.addColorStop(1, `rgba(${col},0)`);
-      x.fillStyle = g; x.beginPath(); x.arc(cx, cy, R * (1.3 + lv), 0, 7); x.fill();
-      x.strokeStyle = `rgba(${col},.6)`;
-      for (let k = 0; k < 3; k++) { x.beginPath(); x.arc(cx, cy, R * (1.5 + k * .25), t / 1000 * (k % 2 ? -1 : 1) * (.3 + k * .2), t / 1000 * (k % 2 ? -1 : 1) * (.3 + k * .2) + 4.4); x.lineWidth = 2; x.stroke(); }
-      voice *= .88; mic *= .85; requestAnimationFrame(draw);
-    }
-    requestAnimationFrame(draw);
-    three = { shock() {}, hitCore: (e) => Math.hypot(e.clientX - innerWidth / 2, e.clientY - innerHeight * .42) < Math.min(innerWidth, innerHeight) * .25 };
+    const c = $("fallback"); c.style.display = "block"; canvas.style.display = "none"; const x = c.getContext("2d");
+    (function draw(t) { const w = c.width = innerWidth, h = c.height = innerHeight, cx = w / 2, cy = h * .4, R = Math.min(w, h) * .2;
+      for (let i = 0; i < 3; i++) cur[i] += (target[i] - cur[i]) * .06; const col = cur.map(Math.round).join(","), lv = state === "hablando" ? voice : mic;
+      const g = x.createRadialGradient(cx, cy, 0, cx, cy, R * (1.3 + lv)); g.addColorStop(0, "rgba(255,255,255,.9)"); g.addColorStop(.2, `rgba(${col},.7)`); g.addColorStop(1, `rgba(${col},0)`);
+      x.fillStyle = g; x.beginPath(); x.arc(cx, cy, R * (1.3 + lv), 0, 7); x.fill(); voice *= .86; mic *= .85; requestAnimationFrame(draw); })(0);
+    three = { shock() {} };
   }
   if (!initThree()) initFallback();
 
-  function setMoodColor(m) {
-    const key = state === "pensando" ? "pensando" : state === "error" ? "error" : (moodColors ? m : "neutral");
-    const c = (MOODS[key] || MOODS.neutral).c; target.c = c.slice();
+  function paint() {
+    const key = state === "error" ? "error" : state === "escuchando" ? "escuchando" : mood;
+    const c = MOODS[key] || MOODS.neutral; target.splice(0, 3, ...c);
     document.documentElement.style.setProperty("--accent", `rgb(${c.join(",")})`);
     document.documentElement.style.setProperty("--accent-rgb", c.join(", "));
   }
 
-  // ── UI renderers ──────────────────────────────────────────────
-  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-  function renderSnapshot(s) {
-    const ag = s.agenda || [], now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
-    let nextMarked = false;
-    $("n-agenda").textContent = ag.length || "";
-    $("agenda").innerHTML = ag.length ? ag.map((line) => {
-      const m = line.match(/(\d{1,2})[:.](\d{2})/); let cls = "";
-      if (m) { const mins = +m[1] * 60 + +m[2]; if (mins < nowMin - 30) cls = "past"; else if (!nextMarked) { cls = "next"; nextMarked = true; } }
-      const rest = m ? line.replace(m[0], "").replace(/^[\s·—-]+/, "") : line;
-      return `<li class="${cls}">${m ? `<span class="h">${m[1].padStart(2, "0")}:${m[2]}</span>` : ""}${esc(rest)}</li>`;
-    }).join("") : `<li class="empty" style="padding-left:0">Sin eventos. Conecta tu calendario con <code>jarvis connect gdrive</code>.</li>`;
-    const inbox = [...(s.mensajes || []), ...(s.tareas || []), ...(s.otros || [])];
-    $("n-inbox").textContent = inbox.length || "";
-    $("inbox").innerHTML = inbox.length ? inbox.slice(0, 14).map((t) => `<li>${esc(t)}</li>`).join("") : `<li class="empty">Bandeja al día, o Gmail aún sin conectar.</li>`;
-    if (s.tiempo) { const tm = s.tiempo.match(/[+-]?\d+\s*°C/); $("w-t").textContent = tm ? tm[0].replace(/\s/g, "") : ""; $("w-c").textContent = s.tiempo.split(",")[0]; }
-    $("m-title").textContent = s.metricas_titulo || "Métricas";
-    $("m-time").textContent = s.generado ? s.generado.slice(11, 16) : "";
-    const box = $("metrics");
-    if (!(s.metricas || []).length) { box.innerHTML = `<p class="empty" style="grid-column:1/-1;margin:0">Añade tus métricas en <code>jarvis.toml</code> (Google Sheets o CSV).</p>`; }
-    else { box.innerHTML = s.metricas.slice(0, 8).map((m, i) => `<div class="metric"><div class="v"><span data-count="${esc(m.valor)}">${esc(m.valor)}</span>${m.cambio ? `<span class="c ${esc(m.tendencia)}">${m.tendencia === "up" ? "▲" : m.tendencia === "down" ? "▼" : ""}${esc(m.cambio)}</span>` : ""}</div><div class="k">${esc(m.nombre)}</div></div>`).join("");
-      box.querySelectorAll("[data-count]").forEach(countUp); }
-    tickerLines = [`${ag.length} eventos en agenda`, `${inbox.length} elementos en bandeja`, "Núcleo cuántico estable", s.tiempo ? `Exterior: ${s.tiempo}` : "Enlace neuronal activo"];
+  // ── subtitles ─────────────────────────────────────────────
+  let jarvisText = "";
+  function showJarvis(text) {
+    const el = $("jarvis"); const words = String(text).split(/\s+/).filter(Boolean);
+    const known = jarvisText && text.startsWith(jarvisText) ? jarvisText.split(/\s+/).filter(Boolean).length : 0;
+    if (!known) el.innerHTML = "";
+    const tail = words.slice(-40); const skip = Math.max(0, known - (words.length - tail.length));
+    if (known) { while (el.childNodes.length > tail.length) el.removeChild(el.firstChild); }
+    for (let i = known ? skip : 0; i < tail.length; i++) { const s = document.createElement("span"); s.className = "w"; s.style.animationDelay = `${(i - skip) * 35}ms`; s.textContent = tail[i] + " "; el.appendChild(s); }
+    jarvisText = text;
   }
-  function countUp(el) {
-    const raw = el.dataset.count, m = raw.match(/^([^\d-]*)(-?[\d.,]+)(.*)$/); if (!m || reduce) return;
-    const num = parseFloat(m[2].replace(/\./g, "").replace(",", ".")); if (!isFinite(num)) return;
-    const dec = (m[2].split(",")[1] || "").length, t0 = performance.now();
-    const fmt = (v) => m[1] + v.toLocaleString("es-ES", { minimumFractionDigits: dec, maximumFractionDigits: dec }) + m[3];
-    const step = (now) => { const k = Math.min(1, (now - t0) / 1100), e = 1 - Math.pow(1 - k, 3); el.textContent = fmt(num * e); if (k < 1) requestAnimationFrame(step); else el.textContent = raw; };
-    requestAnimationFrame(step);
-  }
-  function setGauge(id, val, txt) {
-    const c = $("g-" + id), C = 2 * Math.PI * 22; c.style.strokeDasharray = C; c.style.strokeDashoffset = C * (1 - Math.max(0, Math.min(100, val || 0)) / 100);
-    $("v-" + id).textContent = txt;
-  }
-  let timers = [];
-  function renderTimers() {
-    $("n-timers").textContent = timers.length || "";
-    if (!timers.length) { $("timers").innerHTML = `<p class="empty" style="margin:0">Dile «pon un temporizador de 5 minutos».</p>`; return; }
-    const C = 2 * Math.PI * 32, now = Date.now() / 1000;
-    $("timers").innerHTML = timers.map((t) => { const rem = Math.max(0, t.ends_at - now), k = rem / t.seconds, mm = Math.floor(rem / 60), ss = Math.floor(rem % 60);
-      return `<div class="timer" data-id="${esc(t.id)}" title="Cancelar"><svg viewBox="0 0 74 74"><circle class="bg" cx="37" cy="37" r="32"/><circle class="fg" cx="37" cy="37" r="32" style="stroke-dasharray:${C};stroke-dashoffset:${C * (1 - k)}"/></svg><div class="tv">${mm}:${String(ss).padStart(2, "0")}</div><div class="tl">${esc(t.label)}</div></div>`; }).join("");
-  }
-  setInterval(renderTimers, 1000);
-  function renderNotes(items) {
-    $("n-notes").textContent = items.length || "";
-    $("notes").innerHTML = items.length ? items.map((n) => `<li><span>${esc(n.texto)}</span><button class="x" data-note="${esc(n.id)}" aria-label="Borrar nota">✕</button></li>`).join("") : `<li class="empty">Dile «apunta que…» o escribe aquí.</li>`;
-  }
-  let voices = [], actual = {};
-  function renderVoices() {
-    $("voices").innerHTML = voices.map((v, i) => `<div class="voice ${v.motor === actual.motor && (v.voz === actual.voz || v.motor !== "edge") ? "sel" : ""}" data-v="${i}" tabindex="0"><span>${esc(v.nombre)}</span><span class="m">${esc(v.motor)}</span></div>`).join("");
+  function setYou(t) { $("you").textContent = t || ""; }
+
+  // ── activity chips (what Jarvis is doing on the PC) ───────
+  const TOOL = {
+    abrir_web: (d) => `Abriendo ${String(d.url || "").replace(/^https?:\/\//, "").split("/")[0]}`,
+    poner_youtube: (d) => `YouTube · ${d.busqueda || ""}`, abrir_app: (d) => `Abriendo ${d.nombre || ""}`,
+    buscar_google: (d) => `Buscando «${d.consulta || ""}»`, multimedia: () => "Control multimedia", volumen: (d) => d.nivel != null ? `Volumen al ${d.nivel} %` : "Volumen",
+    brillo: (d) => `Brillo al ${d.nivel} %`, fondo_pantalla: (d) => `Fondo de pantalla · ${d.imagen || ""}`, modo_oscuro: (d) => d.activar ? "Modo oscuro" : "Modo claro",
+    abrir_ajustes: (d) => `Ajustes · ${d.apartado || ""}`, bloquear_pantalla: () => "Bloqueando el PC", temporizador: (d) => `Temporizador · ${d.etiqueta || ""}`,
+    recordar: () => "Guardado en memoria", olvidar: () => "Olvidando", mirar_pantalla: () => "Mirando tu pantalla", mirar_camara: () => "Mirando por la cámara",
+    usar_pantalla: () => "Manejando el ordenador", redactar_correo: (d) => `Correo para ${d.para || ""}`, ejecutar_comando: () => "Preparando un comando",
+  };
+  function activity(text, ms = 3500) {
+    const el = document.createElement("div"); el.className = "act"; el.innerHTML = `<span class="ring"></span><span>${esc(text)}</span>`;
+    $("activity").appendChild(el); setTimeout(() => { el.classList.add("done"); }, Math.min(1200, ms / 2));
+    setTimeout(() => { el.style.transition = ".4s"; el.style.opacity = "0"; setTimeout(() => el.remove(), 400); }, ms);
+    while ($("activity").children.length > 3) $("activity").firstChild.remove();
   }
 
-  // subtitles with per-word reveal
-  let subText = "", subRole = "";
-  function subtitles(text, role) {
-    const el = $("subs");
-    if (role !== subRole || !text.startsWith(subText)) { el.innerHTML = ""; subText = ""; }
-    el.className = "subtitles" + (role === "user" ? " user" : "");
-    const fresh = text.slice(subText.length).split(/(\s+)/);
-    let delay = 0;
-    fresh.forEach((w) => { if (!w) return; if (/^\s+$/.test(w)) { el.appendChild(document.createTextNode(" ")); return; }
-      const s = document.createElement("span"); s.className = "w"; s.textContent = w; s.style.animationDelay = (delay += 45) + "ms"; el.appendChild(s); });
-    subText = text; subRole = role;
-    while (el.textContent.length > 360 && el.firstChild) el.removeChild(el.firstChild);
-  }
-  function chatLine(role, text) {
-    const b = document.createElement("div"); b.className = "bubble " + role;
-    b.innerHTML = `<small>${role === "jarvis" ? "JARVIS" : "TÚ"}</small>`; b.appendChild(document.createTextNode(text));
-    $("chat").appendChild(b); $("chat").scrollTop = 1e9;
-  }
-  function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add("show"); clearTimeout(toast.h); toast.h = setTimeout(() => el.classList.remove("show"), 7000); }
-
-  // ── camera (live preview + frames for Jarvis' vision) ─────────
-  let camStream = null;
-  async function camOn() {
-    if (camStream) { $("cam").classList.add("on"); return true; }
-    try {
-      camStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-      $("camvideo").srcObject = camStream; $("cam").classList.add("on"); $("b-cam").classList.add("on");
-      await new Promise((r) => setTimeout(r, 700)); return true;
-    } catch (e) { toast("No tengo permiso para usar la cámara. Permítelo en la ventana del navegador."); return false; }
-  }
-  function camOff() { if (camStream) camStream.getTracks().forEach((t) => t.stop()); camStream = null; $("cam").classList.remove("on"); $("b-cam").classList.remove("on"); }
-  async function camFrame(id) {
-    if (!(await camOn())) return;
-    const v = $("camvideo"), c = document.createElement("canvas"), w = Math.min(1024, v.videoWidth || 640);
-    c.width = w; c.height = Math.round(w * (v.videoHeight || 480) / (v.videoWidth || 640));
-    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
-    $("camshot").classList.remove("go"); void $("camshot").offsetWidth; $("camshot").classList.add("go"); sfx.click();
-    post("frame", { id, image: c.toDataURL("image/jpeg", .82) });
-  }
-  $("b-cam").addEventListener("click", () => (camStream ? camOff() : camOn()));
-
-  // ── screen-watch mode: Jarvis sees the screen, HUD shrinks to a widget ─
-  let watching = false, bigSize = null;
-  function enterMini() {
-    if (document.body.classList.contains("mini")) return;
-    bigSize = { w: window.outerWidth, h: window.outerHeight, x: window.screenX, y: window.screenY };
-    document.body.classList.add("mini");
-    try { window.resizeTo(380, 470); window.moveTo(screen.availLeft + screen.availWidth - 395, screen.availTop + screen.availHeight - 485); } catch (_) {}
-  }
-  function exitMini() {
-    if (!document.body.classList.contains("mini")) return;
-    document.body.classList.remove("mini");
-    try { const b = bigSize || { w: 1600, h: 900, x: 40, y: 40 }; window.resizeTo(b.w, b.h); window.moveTo(b.x, b.y); } catch (_) {}
-  }
-  function setWatching(on) {
-    watching = !!on; document.body.classList.toggle("watching", watching); $("b-screen").classList.toggle("on", watching);
-    watching ? enterMini() : exitMini();
-  }
-  $("b-screen").addEventListener("click", () => post("screen_watch", { on: !watching }));
-  $("camclose").addEventListener("click", camOff);
-
-  // ── ears: Edge / Chrome speech recognition (instant, accurate) ─
+  // ── hearing: Edge / Chrome speech recognition ─────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null, wantListen = false, recRunning = false, recErrors = 0, recSent = false, recTimer = 0, recSilence = 600;
+  let rec = null, recOn = false, want = false, sent = false, timer = 0, silence = 600, lastHeard = 0;
+  // Words that mean "I haven't finished": wait a little longer before sending.
+  const OPEN = /^(y|o|que|de|del|la|el|los|las|un|una|unos|con|para|por|pero|en|a|al|mi|mis|tu|su|como|si|porque|cuando|donde|es|eh|em|mmm|este|esto|pues|entonces|tambien|también|me|le|se)$/i;
+  function recBuild() {
+    rec = new SR(); rec.lang = "es-ES"; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+    rec.onstart = () => { recOn = true; };
+    rec.onend = () => { recOn = false; if (want && micOn) setTimeout(recStart, 60); };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") { want = false; toast(local ? "No tengo permiso para el micrófono en esta ventana." : "Chrome no deja usar el micrófono aquí. Mira el apartado Remoto, paso 3.", 9000); }
+      else if (e.error === "network") toast("El reconocimiento de voz necesita internet.");
+      else if (e.error === "audio-capture") toast("No encuentro ningún micrófono.");
+    };
+    rec.onresult = (e) => {
+      let all = "", interim = "", final = false;
+      for (let i = 0; i < e.results.length; i++) { const r = e.results[i]; all += r[0].transcript; if (r.isFinal) final = true; else if (i >= e.resultIndex) interim += r[0].transcript; }
+      const t = all.replace(/\s+/g, " ").trim(); if (!t || sent) return;
+      lastHeard = performance.now(); mic = Math.max(mic, .6);
+      if (background) { clearTimeout(timer); timer = setTimeout(() => recSend(t), 500); return; }
+      if (state === "reposo") { state = "escuchando"; document.body.dataset.state = state; $("state").textContent = "ESCUCHANDO"; paint(); }
+      setYou(t); clearTimeout(timer);
+      const words = t.split(" "), lastWord = words[words.length - 1];
+      let wait = silence + (OPEN.test(lastWord) ? 650 : 0) + (words.length < 2 ? 250 : 0);
+      if (final && !interim.trim()) wait = Math.min(wait, OPEN.test(lastWord) ? 500 : 120);
+      timer = setTimeout(() => recSend(t), wait);
+    };
+  }
   function recStart() {
-    if (!SR) { post("stt_unsupported"); return; }
-    wantListen = true;
-    if (recRunning) return;
-    if (!rec) {
-      rec = new SR(); rec.lang = "es-ES"; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
-      rec.onstart = () => { recRunning = true; };
-      rec.onend = () => { recRunning = false; if (wantListen && micOn) setTimeout(recStart, recErrors > 3 ? 2000 : 120); };
-      rec.onerror = (e) => {
-        recErrors++;
-        if (e.error === "not-allowed" || e.error === "service-not-allowed") { wantListen = false; toast("No tengo permiso para usar el micrófono en esta ventana."); }
-        else if (e.error === "network") toast("El reconocimiento de voz necesita conexión a internet.");
-        else if (e.error === "audio-capture") toast("No encuentro ningún micrófono.");
-      };
-      rec.onresult = (e) => {
-        recErrors = 0; let all = "", inter = "", anyFinal = false;
-        for (let i = 0; i < e.results.length; i++) { const r = e.results[i]; all += r[0].transcript; if (r.isFinal) anyFinal = true; else if (i >= e.resultIndex) inter += r[0].transcript; }
-        const t = all.trim(); if (!t || recSent) return;
-        if (state === "reposo") { document.body.dataset.state = "escuchando"; $("state").textContent = "ESCUCHANDO"; }
-        subtitles(t, "user"); mic = Math.max(mic, .55 + Math.random() * .35);
-        clearTimeout(recTimer);
-        // Send as soon as you stop talking ([oido] silencio, 0.6 s by default)
-        // instead of waiting for the browser to close the sentence (1-2 s more).
-        if (anyFinal && !inter.trim()) recSend(t); else recTimer = setTimeout(() => recSend(t), recSilence);
-      };
-    }
-    recSent = false;
+    if (!SR) { if (local) post("stt_unsupported"); return; }
+    want = true; sent = false; if (recOn) return; if (!rec) recBuild();
     try { rec.start(); } catch (_) {}
   }
   function recSend(t) {
-    if (recSent) return; recSent = true; clearTimeout(recTimer); wantListen = false;
+    if (sent) return; sent = true; clearTimeout(timer);
     try { rec.abort(); } catch (_) {}
-    post("heard", { text: t }).then((r) => { if (!(r && r.ok && r.result && r.result.ok)) recStart(); });
+    post("heard", { text: t }).then((r) => { const res = result(r); sent = false; if (!(res && res.ok)) { if (want) recStart(); } });
   }
-  function recStop() { clearTimeout(recTimer); wantListen = false; if (rec && recRunning) { try { rec.abort(); } catch (_) {} } }
+  function recStop() { clearTimeout(timer); want = false; if (rec && recOn) { try { rec.abort(); } catch (_) {} } }
 
-  // ── events from Jarvis ────────────────────────────────────────
-  let stateSince = Date.now(), baseSub = "";
+  // ── camera ────────────────────────────────────────────────
+  let camStream = null;
+  async function camOn() {
+    if (camStream) { $("cam").classList.add("on"); return true; }
+    try { camStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      $("camvideo").srcObject = camStream; $("cam").classList.add("on"); $("b-cam").classList.add("on"); await new Promise((r) => setTimeout(r, 450)); return true;
+    } catch (e) { toast("No tengo permiso para usar la cámara."); return false; }
+  }
+  function camOff() { if (camStream) camStream.getTracks().forEach((t) => t.stop()); camStream = null; $("cam").classList.remove("on"); $("b-cam").classList.remove("on"); }
+  async function camFrame(id) {
+    if (!(await camOn())) return; const v = $("camvideo"), c = document.createElement("canvas"), w = Math.min(1024, v.videoWidth || 640);
+    c.width = w; c.height = Math.round(w * (v.videoHeight || 480) / (v.videoWidth || 640)); c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    $("camshot").classList.remove("go"); void $("camshot").offsetWidth; $("camshot").classList.add("go");
+    post("frame", { id, image: c.toDataURL("image/jpeg", .82).split(",")[1] });
+  }
+  $("b-cam").onclick = () => (camStream ? camOff() : camOn());
+  $("camclose").onclick = camOff;
+
+  // ── remote audio (Chromebook) ─────────────────────────────
+  const audioQ = []; let playing = false;
+  function playNext() { if (playing || !audioQ.length) return; playing = true; const a = new Audio("data:audio/mpeg;base64," + audioQ.shift());
+    a.onended = a.onerror = () => { playing = false; playNext(); }; a.play().catch(() => { playing = false; toast("Toca la pantalla una vez para oír a Jarvis."); }); }
+
+  // ── views ─────────────────────────────────────────────────
+  let view = "home";
+  function show(v) {
+    view = v; document.querySelectorAll(".nav[data-view]").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
+    document.querySelectorAll(".view").forEach((s) => s.classList.toggle("on", s.id === "v-" + v));
+    document.body.classList.toggle("panel-open", v !== "home");
+    if (v === "chat") loadHistory(); if (v === "settings" || v === "remote") loadConfig(); if (v === "memory") post("memory").then((r) => renderMemory((result(r) || {}).items || []));
+  }
+  document.querySelectorAll(".nav[data-view]").forEach((b) => b.onclick = () => { sfx.tap(); show(b.dataset.view); });
+
+  // chat
+  function msgEl(role, text) { const d = document.createElement("div"); d.className = "msg " + (role === "user" ? "user" : "jarvis"); d.textContent = text; return d; }
+  function loadHistory() { post("history").then((r) => { const items = (result(r) || {}).items || [], box = $("msgs"); box.innerHTML = "";
+    if (!items.length) box.innerHTML = `<div class="empty">Aún no habéis hablado.</div>`; items.forEach((m) => box.appendChild(msgEl(m.role, m.text)));
+    box.parentElement.scrollTop = 1e9; }); }
+  function chatAppend(role, text) { if (view !== "chat") return; const box = $("msgs"); box.querySelector(".empty")?.remove(); box.appendChild(msgEl(role, text)); box.parentElement.scrollTop = 1e9; }
+
+  // memory
+  function renderMemory(items) {
+    const box = $("memlist");
+    if (!items.length) { box.innerHTML = `<div class="empty">Todavía no sé nada de ti. Cuéntame cosas («mi comida favorita es…») o importa lo que sabe otra IA.</div>`; return; }
+    box.innerHTML = items.slice().reverse().map((m) => `<div class="mem" data-id="${esc(m.id)}"><span class="t" contenteditable="true" spellcheck="false">${esc(m.texto)}</span><small>${esc(m.fecha || "")}</small><button class="del" title="Olvidar">×</button></div>`).join("");
+    box.querySelectorAll(".mem").forEach((row) => {
+      const t = row.querySelector(".t"), id = row.dataset.id, orig = t.textContent;
+      t.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); t.blur(); } };
+      t.onblur = () => { const v = t.textContent.trim(); if (v && v !== orig) post("memory_update", { id, texto: v }).then(() => toast("Recuerdo actualizado.")); };
+      row.querySelector(".del").onclick = () => post("memory_delete", { id }).then((r) => renderMemory((result(r) || {}).items || []));
+    });
+  }
+  $("memadd").onsubmit = (e) => { e.preventDefault(); const v = $("memtext").value.trim(); if (!v) return;
+    post("memory_add", { texto: v }).then((r) => { $("memtext").value = ""; renderMemory((result(r) || {}).items || []); }); };
+  $("b-copy").onclick = () => { navigator.clipboard?.writeText($("importprompt").textContent).then(() => toast("Copiado. Pégalo en la otra IA.")); };
+  $("b-import").onclick = () => { const v = $("importtext").value.trim(); if (v.length < 10) { toast("Pega primero la respuesta de la otra IA."); return; }
+    const b = $("b-import"); b.disabled = true; b.textContent = "Importando…";
+    post("memory_import", { texto: v }).then((r) => { b.disabled = false; b.textContent = "Importar"; const res = result(r);
+      if (!res) { toast((r && r.error) || "No se pudo importar."); return; } $("importtext").value = ""; renderMemory(res.items || []); toast(`Listo: ${res.nuevos} recuerdos nuevos.`); }); };
+
+  // settings
+  let cfg = null;
+  function control(s) {
+    const id = `s-${s.seccion}-${s.clave}`;
+    if (s.tipo === "bool") return `<button class="switch ${s.valor ? "on" : ""}" id="${id}" aria-label="${esc(s.etiqueta)}"></button>`;
+    if (s.tipo === "rango") return `<div class="range"><input type="range" id="${id}" min="${s.min}" max="${s.max}" step="${s.paso}" value="${s.valor}"><output>${s.valor}</output></div>`;
+    if (s.tipo === "opcion") return `<select class="field" id="${id}">${s.opciones.map(([v, n]) => `<option value="${esc(v)}" ${v === s.valor ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>`;
+    return `<input class="field" id="${id}" value="${esc(s.valor)}" ${s.clave === "pin" ? 'inputmode="numeric" maxlength="12"' : ""}>`;
+  }
+  function wire(s) {
+    const el = $(`s-${s.seccion}-${s.clave}`); if (!el) return;
+    const save = (valor) => post("set_config", { seccion: s.seccion, clave: s.clave, valor }).then((r) => {
+      const res = result(r); if (!res) { toast((r && r.error) || "No se pudo guardar."); return; } s.valor = res.valor;
+      toast(res.reinicio ? "Guardado. Cierra Jarvis y vuelve a abrirlo para aplicarlo." : "Guardado.", 2500); });
+    if (s.tipo === "bool") el.onclick = () => { el.classList.toggle("on"); save(el.classList.contains("on")); };
+    else if (s.tipo === "rango") { el.oninput = () => { el.nextElementSibling.textContent = el.value; }; el.onchange = () => save(parseFloat(el.value)); }
+    else el.onchange = () => save(el.value);
+  }
+  function renderSettings() {
+    const groups = {}; cfg.ajustes.filter((s) => s.grupo !== "Remoto").forEach((s) => (groups[s.grupo] = groups[s.grupo] || []).push(s));
+    $("settings").innerHTML = Object.entries(groups).map(([g, items]) => `<div class="sect"><h3>${esc(g)}</h3><div class="card">${items.map((s) => `<div class="row"><div class="lbl">${esc(s.etiqueta)}</div>${control(s)}</div>`).join("")}</div></div>`).join("");
+    const remote = cfg.ajustes.filter((s) => s.grupo === "Remoto");
+    $("remoteset").innerHTML = remote.map((s) => `<div class="row"><div class="lbl">${esc(s.etiqueta)}</div>${control(s)}</div>`).join("");
+    cfg.ajustes.forEach(wire);
+    $("voices").innerHTML = cfg.voces.map((v) => `<button class="voice ${v.voz === cfg.voz.voz ? "on" : ""}" data-m="${esc(v.motor)}" data-v="${esc(v.voz)}"><b>${esc(v.nombre.split(" · ")[0])}</b><span>${esc(v.nombre.split(" · ").slice(1).join(" · ") || v.motor)}</span></button>`).join("");
+    $("voices").querySelectorAll(".voice").forEach((b) => b.onclick = () => { cfg.voz = { motor: b.dataset.m, voz: b.dataset.v };
+      $("voices").querySelectorAll(".voice").forEach((x) => x.classList.toggle("on", x === b)); post("voice", { motor: b.dataset.m, voz: b.dataset.v, probar: true }); });
+    $("sw-autostart").classList.toggle("on", !!cfg.autoarranque);
+    $("version").textContent = `Versión ${cfg.version}. Descarga la última y se reinicia solo.`;
+    const dirs = cfg.remoto.direcciones || []; $("r-url").textContent = dirs[0] || "(activa el acceso remoto)";
+  }
+  function loadConfig() { post("config").then((r) => { cfg = result(r); if (cfg) renderSettings(); }); }
+  $("sw-autostart").onclick = () => { const on = !$("sw-autostart").classList.contains("on"); post("autostart", { on }).then((r) => { if (result(r)) { $("sw-autostart").classList.toggle("on", on); toast(on ? "Jarvis arrancará con Windows." : "Ya no arrancará con Windows."); } }); };
+  $("b-forget").onclick = () => { if (confirm("¿Borrar toda la conversación? Los recuerdos de Memoria se mantienen.")) post("forget").then(() => { loadHistory(); }); };
+  $("b-update").onclick = () => { if (confirm("Jarvis se cerrará, se actualizará y volverá a abrirse en un minuto.")) post("update").then((r) => { if (!result(r)) toast((r && r.error) || "No se pudo actualizar."); }); };
+  $("b-quit").onclick = () => { if (confirm("¿Cerrar Jarvis del todo?")) { quitting = true; post("quit"); } };
+
+  // ── buttons, keyboard, ask bar ────────────────────────────
+  function ask(text) { text = String(text || "").trim(); if (!text) return; audio(); setYou(text); post("ask", { text }).then((r) => { const res = result(r); if (res && res.started === false) toast("Un momento, estoy terminando lo anterior (Esc para cortarme)."); }); }
+  $("askform").onsubmit = (e) => { e.preventDefault(); const v = $("askinput").value; $("askinput").value = ""; ask(v); };
+  document.querySelectorAll("[data-ask]").forEach((b) => b.onclick = () => ask(b.dataset.ask));
+  document.querySelectorAll("[data-reply]").forEach((b) => b.onclick = () => post("heard", { text: b.dataset.reply }));
+  $("b-talk").onclick = () => { audio(); if (state === "hablando" || state === "pensando") post("stop"); else post("listen"); };
+  $("b-mic").onclick = () => post("mic", { on: !micOn });
+  $("b-power").onclick = () => post("background", { on: true });
+  $("b-wake").onclick = () => post("wake");
+  let watching = false; $("b-screen").onclick = () => post("screen_watch", { on: !watching });
+  addEventListener("keydown", (e) => {
+    const typing = /input|textarea|select/i.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); show("home"); $("askinput").focus(); }
+    else if (e.key === "Escape") { post("stop"); document.activeElement?.blur(); }
+    else if (e.code === "Space" && !typing) { e.preventDefault(); $("b-talk").click(); }
+  });
+  addEventListener("pointerdown", () => audio(), { once: true });
+  let quitting = false;
+  addEventListener("pagehide", () => { if (local && !quitting) navigator.sendBeacon?.("/api/background", JSON.stringify({ cerrada: true })); });
+
+  // ── events from Jarvis ────────────────────────────────────
   function onEvent(ev) {
     switch (ev.type) {
-      case "state": {
-        const prev = state; state = ev.state; document.body.dataset.state = state; stateSince = Date.now();
-        $("state").textContent = state === "reposo" && continua && micOn ? "A LA ESCUCHA" : (STATE[state] || state.toUpperCase()); baseSub = ev.label || ""; $("sub").textContent = baseSub;
-        if (state === "escuchando" && prev !== "escuchando") sfx.listen();
-        setMoodColor(mood); if (state !== "arrancando") finishBoot(); break; }
-      case "wake": burst = 1; three && three.shock(); setTimeout(() => three && three.shock(), 180); sfx.wake(); $("flash").classList.remove("go"); void $("flash").offsetWidth; $("flash").classList.add("go"); break;
+      case "hello": local = !!ev.local; document.body.classList.toggle("remote", !local); break;
+      case "state": { const prev = state; state = ev.state; document.body.dataset.state = state;
+        $("state").textContent = STATE[state] || state.toUpperCase(); $("hint").textContent = state === "reposo" ? (ev.label || "") : "";
+        if (state === "escuchando" && prev !== "escuchando") sfx.listen(); if (state === "reposo") $("confirm").classList.remove("on");
+        $("b-talk").classList.toggle("live", state === "escuchando"); paint(); break; }
+      case "wake": burst = 1; three.shock(); setTimeout(() => three.shock(), 170); sfx.wake(); show("home"); break;
       case "level": if (ev.source === "voz") voice = Math.max(voice, ev.value); else mic = Math.max(mic, ev.value); break;
-      case "mood": mood = ev.mood || "neutral"; setMoodColor(mood); { const m = MOODS[mood]; $("moodtag").hidden = !m || !m.n || mood === "neutral"; $("moodname").textContent = m ? m.n : ""; } break;
-      case "partial": subtitles(ev.text, ev.role); break;
-      case "message": subtitles(ev.text, ev.role); chatLine(ev.role, ev.text); break;
-      case "snapshot": renderSnapshot(ev); break;
-      case "system": setGauge("cpu", ev.cpu, ev.cpu + "%"); setGauge("ram", ev.ram, ev.ram + "%");
-        if (ev.bateria != null) { setGauge("bat", ev.bateria, ev.bateria + "%"); $("l-bat").textContent = ev.cargando ? "CARGA" : "BAT"; } else { setGauge("bat", 100, "AC"); } break;
-      case "timers": timers = ev.items || []; renderTimers(); break;
-      case "notes": renderNotes(ev.items || []); break;
-      case "voices": voices = ev.items || []; actual = ev.actual || {}; renderVoices(); break;
-      case "mic": micOn = !!ev.on; if (!micOn) recStop(); $("sw-mic").classList.toggle("on", micOn); $("mic").classList.toggle("off", !micOn); break;
-      case "status": continua = !!ev.continua; if (ev.silencio) recSilence = Math.round(ev.silencio * 1000); if (state === "reposo" && continua) $("state").textContent = "A LA ESCUCHA"; tickerLines.unshift(ev.motor ? `Cerebro: ${ev.motor}` : "Cerebro sin conexión"); if (!ev.motor) toast("El cerebro de IA no responde. Revisa Ollama o tu clave de Claude."); break;
-      case "alarm": sfx.alarm(); document.body.classList.remove("alarm"); void document.body.offsetWidth; document.body.classList.add("alarm"); toast(`⏰ Temporizador de ${ev.label} terminado`); break;
-      case "notice": toast(ev.text); break;
+      case "mood": mood = ev.mood || "neutral"; paint(); break;
+      case "partial": if (ev.role === "jarvis") showJarvis(ev.text); else setYou(ev.text); break;
+      case "message": if (ev.role === "jarvis") { showJarvis(ev.text); } else { setYou(ev.text); jarvisText = ""; $("jarvis").innerHTML = ""; } chatAppend(ev.role, ev.text); break;
+      case "confirm": $("confirm-q").textContent = ev.pregunta || ""; $("confirm").classList.toggle("on", !!ev.pregunta); break;
+      case "snapshot": if (ev.tiempo) { const m = ev.tiempo.match(/[+-]?\d+\s*°C/); $("w-t").textContent = m ? m[0].replace(/\s/g, "") : ""; $("w-c").textContent = " " + ev.tiempo.split(",")[0]; $("weather").classList.remove("hidden"); } break;
+      case "system": { const set = (k, v, t) => { $("g-" + k).style.width = Math.max(0, Math.min(100, v || 0)) + "%"; $("v-" + k).textContent = t; };
+        set("cpu", ev.cpu, ev.cpu + "%"); set("ram", ev.ram, ev.ram + "%");
+        if (ev.bateria != null) { set("bat", ev.bateria, ev.bateria + "%"); $("l-bat").textContent = ev.cargando ? "CARGA" : "BAT"; } else set("bat", 100, "AC"); break; }
+      case "mic": micOn = !!ev.on; if (!micOn) recStop(); $("b-mic").classList.toggle("mic-off", !micOn); $("b-mic").querySelector(".tip").textContent = micOn ? "Micrófono encendido" : "Micrófono apagado"; break;
+      case "status": if (ev.silencio) silence = Math.round(ev.silencio * 1000); if (ev.motor === "") toast("El cerebro de IA no responde. Revisa tu clave de Claude.", 9000); break;
+      case "listen": (ev.on && micOn) ? recStart() : recStop(); break;
+      case "notice": toast(ev.text, 7000); break;
+      case "alarm": sfx.alarm(); toast(`⏰ ${ev.label}: ¡tiempo!`, 9000); break;
       case "camera": ev.on ? camOn() : camOff(); break;
-      case "screen_watch": setWatching(ev.on); break;
-      case "listen": (ev.on && micOn) ? recStart() : recStop(); if (!ev.on && state === "escuchando") { /* server took over */ } break;
       case "camera_request": camFrame(ev.id); break;
-      case "timing": { const txt = `⏱ ${ev.total}s · cerebro ${ev.cerebro}s · voz ${ev.voz}s`; tickerLines.unshift(txt); $("timing").textContent = txt; $("timing").hidden = false; break; }
-      case "pc": tickerLines.unshift(ev.texto || "Acción ejecutada"); typeTicker(ev.texto || ""); break;
+      case "screen_watch": watching = !!ev.on; $("b-screen").classList.toggle("on", watching); break;
+      case "timing": $("timing").textContent = `⏱ ${ev.total}s · cerebro ${ev.cerebro}s · voz ${ev.voz}s`; break;
+      case "tool": activity((TOOL[ev.nombre] || (() => "Trabajando…"))(ev.datos || {}), ev.nombre === "usar_pantalla" ? 6000 : 3200); break;
+      case "pc": activity(ev.texto || "Hecho"); break;
+      case "computer": if (ev.on) activity("Manejando el ordenador…", 8000); else sfx.done(); break;
+      case "memory": if (view === "memory") renderMemory(ev.items || []); break;
+      case "background": background = !!ev.on; document.body.classList.toggle("bg", background); if (!background) $("confirm").classList.remove("on"); break;
+      case "audio": if (!local) { audioQ.push(ev.mp3); playNext(); } break;
+      case "quit": quitting = true; setTimeout(() => window.close(), 150); break;
     }
   }
-  setInterval(() => { if (state === "pensando") { const s = Math.floor((Date.now() - stateSince) / 1000); if (s >= 2) $("sub").textContent = `${baseSub} ${s} s`; } }, 1000);
   function connect() {
     const es = new EventSource("/events");
     es.onmessage = (e) => { try { onEvent(JSON.parse(e.data)); } catch (err) { console.warn(err); } };
-    es.onerror = () => { $("ticker").textContent = "RECONECTANDO ENLACE…"; };
+    es.onerror = () => { $("state").textContent = "RECONECTANDO"; };
   }
-
-  // ── boot sequence ─────────────────────────────────────────────
-  let booted = false;
-  function finishBoot() { if (booted) return; booted = true; setTimeout(() => { $("boot").classList.add("done"); document.body.classList.remove("boot"); burst = .8; three && three.shock(); }, 300); }
-  (function boot() {
-    const lines = ["J.A.R.V.I.S.  v2.0", "", "› Núcleo holográfico ........ OK", "› Matriz de voz ............. OK", "› Reconocimiento auditivo .... OK", "› Enlace neuronal ............ OK", "› Sincronizando datos ........", "", "SISTEMAS EN LÍNEA"];
-    let i = 0; const log = $("bootlog");
-    const step = () => { if (i >= lines.length) { setTimeout(finishBoot, 600); return; } log.textContent += lines[i] + "\n"; $("bootbar").style.width = ((++i) / lines.length * 100) + "%"; setTimeout(step, reduce ? 0 : 140); };
-    step(); setTimeout(finishBoot, 6000);
-    addEventListener("pointerdown", () => { if (!ac) { audio(); sfx.boot(); } }, { once: true });
-  })();
-  connect();
-
-  // ── actions ───────────────────────────────────────────────────
-  const post = (path, body) => fetch("/api/" + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
-    .then((r) => r.json()).catch(() => ({ ok: false }));
-  const busy = (r) => { if (r && r.ok && r.result && r.result.started === false) toast("Jarvis está ocupado. Pulsa Esc para interrumpirle."); };
-  const A = {
-    briefing: () => post("activate").then(busy),
-    listen: () => { audio(); post("listen").then(busy); },
-    stop: () => post("stop"),
-    ask: (text) => { if (text.trim()) post("ask", { text }).then(busy); },
-    timer: (s) => post("timer", { segundos: s }),
-    note: (t) => t.trim() && post("note", { texto: t }),
-    cinema: () => { document.body.classList.toggle("cinema"); $("b-cine").classList.toggle("on"); },
-    full: () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {}),
-    drawer: (id) => { document.querySelectorAll(".drawer").forEach((d) => d.id !== id && d.classList.remove("open")); $(id).classList.toggle("open"); sfx.open(); },
-    mic: (on) => post("mic", { on }),
-    refresh: () => { post("refresh"); toast("Actualizando datos…"); },
-    forget: () => post("forget"),
-    testVoice: () => post("voice", { probar: true }).then(busy),
-  };
-  document.addEventListener("click", (e) => {
-    const t = e.target.closest("button, .voice, .timer, .switch"); if (t) sfx.click();
-    if (!t) { if (three && three.hitCore(e) && !e.target.closest(".panel, .drawer, .palette, footer, header")) A.briefing(); return; }
-    if (t.dataset.act === "briefing") A.briefing();
-    if (t.dataset.ask) A.ask(t.dataset.ask);
-    if (t.dataset.timer) A.timer(+t.dataset.timer);
-    if (t.dataset.note) post("note_delete", { id: t.dataset.note });
-    if (t.dataset.close) $(t.dataset.close).classList.remove("open");
-    if (t.classList.contains("timer")) post("timer_cancel", { id: t.dataset.id });
-    if (t.dataset.v != null) { const v = voices[+t.dataset.v]; post("voice", { motor: v.motor, voz: v.voz }).then(() => A.testVoice()); }
-  });
-  document.body.addEventListener("pointermove", (e) => { document.body.style.cursor = three && three.hitCore(e) && !e.target.closest(".panel, .drawer, footer, header") ? "pointer" : ""; });
-  $("mic").addEventListener("click", () => A.listen());
-  $("b-hist").addEventListener("click", () => A.drawer("d-hist"));
-  $("b-voice").addEventListener("click", () => A.drawer("d-voice"));
-  $("b-cine").addEventListener("click", A.cinema);
-  $("b-full").addEventListener("click", A.full);
-  $("b-test").addEventListener("click", A.testVoice);
-  $("b-forget").addEventListener("click", () => { if (confirm("¿Borrar la memoria de conversación de Jarvis?")) A.forget(); });
-  const sw = (id, fn) => $(id).addEventListener("click", () => { const on = !$(id).classList.contains("on"); $(id).classList.toggle("on", on); $(id).setAttribute("aria-checked", on); fn(on); });
-  sw("sw-mic", (on) => A.mic(on));
-  sw("sw-fx", (on) => { fx = on; });
-  sw("sw-mood", (on) => { moodColors = on; setMoodColor(mood); });
-  [["askform", "askinput"], ["askform2", "askinput2"]].forEach(([f, i]) => $(f).addEventListener("submit", (e) => { e.preventDefault(); A.ask($(i).value); $(i).value = ""; }));
-  $("noteform").addEventListener("submit", (e) => { e.preventDefault(); A.note($("noteinput").value); $("noteinput").value = ""; });
-
-  // command palette
-  const CMDS = [
-    ["Briefing del día", "ACTIVAR", A.briefing], ["Hablar con Jarvis", "ESPACIO", A.listen], ["Detener", "ESC", A.stop],
-    ["¿Qué tengo hoy?", "PREGUNTA", () => A.ask("¿Qué tengo hoy en la agenda?")], ["Resumen del correo", "PREGUNTA", () => A.ask("Resúmeme lo importante del correo")],
-    ["Analiza mis métricas", "PREGUNTA", () => A.ask("¿Cómo van mis métricas? Dame tu análisis y qué harías")],
-    ["Pomodoro de 25 minutos", "TEMPORIZADOR", () => A.timer(1500)], ["Temporizador de 5 minutos", "TEMPORIZADOR", () => A.timer(300)], ["Temporizador de 1 minuto", "TEMPORIZADOR", () => A.timer(60)],
-    ["Nueva nota", "NOTAS", () => $("noteinput").focus()], ["Ver conversación", "C", () => A.drawer("d-hist")], ["Cambiar voz", "V", () => A.drawer("d-voice")], ["Probar voz", "VOZ", A.testVoice],
-    ["Modo cine", "H", A.cinema], ["Pantalla completa", "F", A.full], ["Actualizar datos", "DATOS", A.refresh],
-    ["Ver mi pantalla en tiempo real", "VISIÓN", () => post("screen_watch", { on: true })],
-    ["Dejar de ver la pantalla", "VISIÓN", () => post("screen_watch", { on: false })],
-    ["Modo mini", "M", () => (document.body.classList.contains("mini") ? exitMini() : enterMini())],
-    ["Activar cámara", "VISIÓN", camOn], ["Apagar cámara", "VISIÓN", camOff],
-    ["¿Qué ves por la cámara?", "VISIÓN", () => A.ask("¿Qué ves?")], ["Explícame mi pantalla", "VISIÓN", () => A.ask("¿Qué hay en mi pantalla y qué hago?")],
-    ["Abrir YouTube", "PC", () => A.ask("abre YouTube")], ["Abrir calendario", "PC", () => A.ask("abre el calendario")], ["Abrir Gmail", "PC", () => A.ask("abre Gmail")],
-    ["Silenciar micrófono", "PRIVACIDAD", () => A.mic(false)], ["Activar micrófono", "PRIVACIDAD", () => A.mic(true)], ["Borrar memoria", "MEMORIA", A.forget],
-  ];
-  let palSel = 0, palItems = CMDS;
-  function palRender() {
-    const q = $("pal-in").value.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-    palItems = CMDS.filter(([n]) => n.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").includes(q));
-    if (q && !palItems.length) palItems = [[`Preguntar a Jarvis: «${$("pal-in").value}»`, "ENTER", () => A.ask($("pal-in").value)]];
-    palSel = Math.min(palSel, palItems.length - 1);
-    $("pal-list").innerHTML = palItems.map(([n, k], i) => `<li class="${i === palSel ? "act" : ""}" data-i="${i}">${esc(n)}<span>${esc(k)}</span></li>`).join("");
-  }
-  function palOpen() { $("palette").classList.add("open"); $("pal-in").value = ""; palSel = 0; palRender(); $("pal-in").focus(); sfx.open(); }
-  function palClose() { $("palette").classList.remove("open"); $("pal-in").blur(); }
-  function palRun(i) { const it = palItems[i]; palClose(); it && it[2](); }
-  $("pal-in").addEventListener("input", () => { palSel = 0; palRender(); });
-  $("pal-list").addEventListener("click", (e) => { const li = e.target.closest("li"); if (li) palRun(+li.dataset.i); });
-  $("palette").addEventListener("click", (e) => { if (e.target.id === "palette") palClose(); });
-  $("pal-in").addEventListener("keydown", (e) => {
-    if (e.key === "ArrowDown") { palSel = (palSel + 1) % palItems.length; palRender(); e.preventDefault(); }
-    if (e.key === "ArrowUp") { palSel = (palSel - 1 + palItems.length) % palItems.length; palRender(); e.preventDefault(); }
-    if (e.key === "Enter") palRun(palSel);
-  });
-
-  // keyboard
-  addEventListener("keydown", (e) => {
-    const typing = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); $("palette").classList.contains("open") ? palClose() : palOpen(); return; }
-    if (e.key === "Escape") { if ($("palette").classList.contains("open")) palClose(); else if (document.querySelector(".drawer.open")) document.querySelectorAll(".drawer").forEach((d) => d.classList.remove("open")); else A.stop(); return; }
-    if (typing) return;
-    if (e.code === "Space" && !e.repeat) { e.preventDefault(); A.listen(); }
-    const k = e.key.toLowerCase();
-    if (k === "m") post("screen_watch", { on: !watching });
-    if (k === "h") A.cinema(); if (k === "f") A.full(); if (k === "c") A.drawer("d-hist"); if (k === "v") A.drawer("d-voice"); if (k === "b") A.briefing();
-  });
+  paint(); connect();
 })();
 </script>
 </body>

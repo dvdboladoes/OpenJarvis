@@ -130,6 +130,9 @@ hud = [
     "soundfile>=0.12",
     "numpy>=1.24",
     "av>=11,<19",  # decode the voice while it streams, so Jarvis speaks sooner
+    "pyautogui>=0.9.54",  # mouse and keyboard for "hazlo tú"
+    "pystray>=0.19",  # icon next to the clock
+    "psutil>=5.9",
 ]
 openhands = ["openhands-sdk>=1.0; python_version >= '3.12'"]
 # Apple Foundation Models (on-device AFM 3). Needs an Apple Silicon Mac on
