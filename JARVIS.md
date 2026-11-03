@@ -12,8 +12,12 @@ segundo plano hasta que lo llamas con **dos palmadas** o diciendo
 Haz doble clic en **Jarvis** (escritorio o menú Inicio). Si ya estaba abierto,
 lo trae al frente. No hace falta PowerShell.
 
-- **Botón de apagar** (abajo a la izquierda): Jarvis se oculta y sigue
-  escuchando. Vuelve con dos palmadas o «Jarvis, enciéndete».
+- **Botón de apagar** (abajo a la izquierda) o di **«apágate»** /
+  **«ponte en segundo plano»**: Jarvis se oculta y sigue escuchando. Vuelve
+  con dos palmadas o «Jarvis, enciéndete». **«Ciérrate del todo»** lo cierra.
+- **Interrumpirle:** si hablas mientras él habla, se calla y te escucha.
+- **Palmadas:** funcionan siempre que Jarvis no esté hablando (también con la
+  ventana abierta). Si no las oye bien: Ajustes → Calibrar palmadas y da 3.
 - **Icono junto al reloj de Windows:** Mostrar, Segundo plano o Salir.
 - **Arrancar con Windows:** Ajustes → Aplicación. Se inicia oculto.
 - **Actualizar:** Ajustes → Actualizar Jarvis. Descarga la última versión y se
@@ -27,7 +31,9 @@ La primera vez, Edge puede pedir permiso para el micrófono: pulsa **Permitir**.
 - «Abre Stripe», «abre Visual Studio Code», «abre la carpeta de descargas»
 - «Dime cuál es la empresa que más factura en España y por qué» (busca en
   internet y te lo resume)
-- «Pon un fondo de pantalla de montañas», «baja el brillo al 40 %»,
+- «Enséñame una imagen de Pikachu» (abre imágenes en el navegador)
+- «Pon un fondo de pantalla de montañas», «vuelve a poner mi fondo»,
+  «baja el brillo al 40 %»,
   «activa el modo oscuro», «sube el volumen», «abre los ajustes de bluetooth»
 - «Mira mi pantalla y dime qué ves», «¿qué ves?» (cámara)
 - «No sé qué poner aquí» → te pregunta si te lo explica o lo hace él. Si le

@@ -87,10 +87,56 @@ def find_wallpaper_image(query: str, timeout: float = 8.0) -> Optional[str]:
     return best[1]
 
 
+WINDOWS_DEFAULT_WALLPAPER = Path(r"C:\Windows\Web\Wallpaper\Windows\img0.jpg")
+
+
+def current_wallpaper() -> str:
+    _need_windows()
+    import winreg
+
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop") as key:
+        return str(winreg.QueryValueEx(key, "WallPaper")[0] or "")
+
+
+def _remember_original_wallpaper() -> None:
+    """Save the user's own wallpaper the first time Jarvis changes it."""
+    note = _data_dir() / "fondo-original.txt"
+    try:
+        now = current_wallpaper()
+    except OSError:
+        return
+    if now and _data_dir() not in Path(now).parents:
+        note.write_text(now, encoding="utf-8")
+
+
+def restore_wallpaper(windows_default: bool = False) -> str:
+    """Put back the user's original wallpaper (or Windows' default one)."""
+    _need_windows()
+    import ctypes
+
+    note = _data_dir() / "fondo-original.txt"
+    target = None
+    if not windows_default and note.exists():
+        saved = Path(note.read_text(encoding="utf-8").strip())
+        if saved.is_file():
+            target = saved
+    if target is None:
+        target = WINDOWS_DEFAULT_WALLPAPER
+    ok = ctypes.windll.user32.SystemParametersInfoW(20, 0, str(target), 3)  # type: ignore[attr-defined]
+    if not ok:
+        raise RuntimeError("Windows no aceptó el fondo.")
+    which = (
+        "el de Windows" if target == WINDOWS_DEFAULT_WALLPAPER else "su fondo original"
+    )
+    return f"Fondo restaurado: {which}."
+
+
 def set_wallpaper(source: str) -> str:
     """Set the desktop background from a file path, an image URL or a topic."""
     _need_windows()
     import ctypes
+
+    _remember_original_wallpaper()
 
     import httpx
 
@@ -305,6 +351,7 @@ __all__ = [
     "find_wallpaper_image",
     "focus_window",
     "lock_screen",
+    "restore_wallpaper",
     "open_settings",
     "run_command",
     "send_open_email",

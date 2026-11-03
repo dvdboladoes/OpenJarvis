@@ -19,6 +19,7 @@ from openjarvis.hud.brain import (
     is_cloud_model,
     is_sleep_command,
     offline_briefing,
+    power_command,
 )
 from openjarvis.hud.config import (
     SETTINGS,
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 # Instant acknowledgement: if no answer is audible after this many seconds,
 # Jarvis says a short, prepared "Mmm…" while the real answer arrives.
-FILLER_AFTER = 0.45
+FILLER_AFTER = 0.3
 FILLERS = ("Mmm…", "Hmm…", "Mmm, mmm…")
 # What the microphone may pick up from those sounds (never a real request).
 FILLER_ECHOES = {"mmm", "mm", "hmm", "hm", "mmm mmm", "eh", "ah"}
@@ -128,6 +129,7 @@ class JarvisAssistant:
             get_reply=self._wait_reply,
             look_camera=self._camera_frame,
             add_timer=lambda secs, label: self.timers.add(secs, label),
+            power=lambda mode: setattr(self, "_after", mode),
             hide_hud=self._hide_for_screen,
             show_hud=self._show_after_screen,
             notify=self.hub.publish,
@@ -164,6 +166,7 @@ class JarvisAssistant:
                 "update": self._api_update,
                 "autostart": self._api_autostart,
                 "history": self._api_history,
+                "clap_calibrate": self._api_clap_calibrate,
             },
             port=cfg.puerto,
             remote=cfg.acceso_remoto,
@@ -187,6 +190,9 @@ class JarvisAssistant:
         self._awaiting = False
         self._spoke = False
         self._question = ""
+        self._after = ""  # "background" / "quit" once the session ends
+        self._said_text = ""  # what Jarvis said last, and when he finished
+        self._said_at = 0.0
         self._replies: "queue.Queue[str]" = queue.Queue()
         self._background = False
         self._claps: Any = None
@@ -362,6 +368,7 @@ class JarvisAssistant:
             status["motor"] = ""
             self._engine_notice(exc)
         self.hub.publish("status", **status)
+        self._start_claps()  # two claps work with the window open too
         if not self._session.locked():
             self._set_state("reposo", self._idle_hint())
 
@@ -455,6 +462,8 @@ class JarvisAssistant:
             return False
         self._cancel.clear()
         self._spoke = False
+        if self._claps is not None:
+            self._claps.pause()  # Jarvis' own voice must not count as claps
         # The page keeps listening while Jarvis thinks, so you can finish your
         # sentence; it stops only when Jarvis starts talking (_mute_ears).
         if self.listener is not None and not self.browser_ears:
@@ -462,11 +471,15 @@ class JarvisAssistant:
         return True
 
     def _mute_ears(self) -> None:
-        """Jarvis is about to speak: stop listening so it never hears itself."""
+        """Jarvis is about to speak. The page keeps listening, but only to tell
+        your voice from Jarvis' own echo: if you talk, it interrupts him."""
         if not self._spoke:
             self._spoke = True
             if self.listener is not None and self.browser_ears:
-                self.listener.pause()
+                self._publish_barge()
+
+    def _publish_barge(self) -> None:
+        self.hub.publish("listen", on=self._mic_enabled, barge=True)
 
     def _end(self) -> None:
         self.hub.publish("transcript", text="", final=True)
@@ -477,6 +490,21 @@ class JarvisAssistant:
                 time.sleep(0.3)  # let the speakers fall silent first
             self.listener.resume()
         self._session.release()
+        if self._claps is not None and self._mic_enabled:
+            self._claps.resume()
+        after, self._after = self._after, ""
+        if after == "background":
+            threading.Thread(target=self.enter_background, daemon=True).start()
+        elif after == "quit":
+            threading.Thread(target=self._quit_by_voice, daemon=True).start()
+
+    def _quit_by_voice(self) -> None:
+        if self._begin():
+            try:
+                self._say(Spoken(f"Hasta luego, {self.cfg.honorific}.", "sereno"))
+            finally:
+                self._end()
+        self._api_quit({})
 
     def _run_session(self, source: str) -> None:
         if not self._begin():
@@ -519,6 +547,8 @@ class JarvisAssistant:
         text = str(payload.get("text", "")).strip()[:2000]
         if not text or len(text) < 2:
             return {"ok": False}
+        if self._is_own_echo(text):
+            return {"ok": False, "eco": True}
         if self._background:
             # Hidden: only "Jarvis, enciéndete" wakes it up.
             if window.is_wake_phrase(text):
@@ -577,6 +607,10 @@ class JarvisAssistant:
             try:
                 self._question = text
                 self.hub.publish("message", role="user", text=text)
+                power = power_command(text)
+                if power:
+                    self._after = power  # done once this session has ended
+                    return
                 if is_sleep_command(text):
                     self._say(
                         Spoken(f"A su disposición, {self.cfg.honorific}.", "sereno")
@@ -922,6 +956,7 @@ class JarvisAssistant:
                     logger.warning("No se pudo reproducir el audio: %s", exc)
 
         if said:
+            self._said_text, self._said_at = " ".join(said), time.monotonic()
             self.hub.publish(
                 "message", role="jarvis", text=" ".join(said), mood=self._mood
             )
@@ -954,6 +989,7 @@ class JarvisAssistant:
         self._set_state("hablando", "")
         self._mute_ears()
         self.speaker.say(text, on_level=self._voice_level, mood=mood)
+        self._said_text, self._said_at = str(text), time.monotonic()
 
     def _engine_notice(self, exc: Exception) -> None:
         """Explain in plain Spanish why the language model is not answering."""
@@ -1212,6 +1248,16 @@ class JarvisAssistant:
                 self.listener.pause()
             self._set_state("pensando", "")
 
+    def _is_own_echo(self, text: str) -> bool:
+        """The microphone caught the tail of what Jarvis just said."""
+        if time.monotonic() - self._said_at > 2.5 or not self._said_text:
+            return False
+        heard = [w for w in _fold_simple(text).split() if len(w) > 2]
+        said = set(_fold_simple(self._said_text).split())
+        if not heard:
+            return False
+        return sum(w in said for w in heard) / len(heard) >= 0.7
+
     def _remote_audio(self, mp3: bytes) -> None:
         """Send Jarvis' voice to remote devices (the Chromebook) too."""
         if self.hub.remote_clients:
@@ -1280,15 +1326,28 @@ class JarvisAssistant:
             from openjarvis.hud.triggers import ClapDetector, MicListener
 
             self._claps = MicListener(
-                on_wake=lambda _src: self.exit_background("palmadas"),
+                on_wake=lambda _src: self._on_claps(),
                 on_level=lambda _lvl: None,
-                clap=ClapDetector(self.cfg.sensibilidad_palmadas),
+                clap=ClapDetector(
+                    self.cfg.sensibilidad_palmadas, threshold=self.cfg.umbral_palmadas
+                ),
                 wake=None,
             )
             self._claps.start()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Detector de palmadas no disponible: %s", exc)
             self._claps = None
+
+    def _on_claps(self) -> None:
+        """Two claps: come back from the background, or say hello if idle."""
+        self.hub.publish("claps")
+        if self._background:
+            self.exit_background("palmadas")
+        elif not self._session.locked():
+            window.bring_to_front()
+            self.wake("palmadas")
+        if self._claps is not None and not self._session.locked():
+            self._claps.resume()
 
     def _api_background(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if payload.get("cerrada"):
@@ -1305,6 +1364,33 @@ class JarvisAssistant:
         else:
             threading.Thread(target=self.exit_background, daemon=True).start()
         return {"ok": True}
+
+    def _api_clap_calibrate(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Record 5 s while the user claps 3 times; tune the detector to it."""
+        import sounddevice as sd
+
+        from openjarvis.hud.triggers import SAMPLE_RATE, calibrate_claps
+
+        if self._claps is not None:
+            self._claps.pause()
+        try:
+            audio = sd.rec(int(5 * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
+            sd.wait()
+        finally:
+            if self._claps is not None and not self._session.locked():
+                self._claps.resume()
+        result = calibrate_claps(audio.reshape(-1), SAMPLE_RATE)
+        if result["umbral"] > 0:
+            self.cfg.umbral_palmadas = result["umbral"]
+            if self.cfg.path is not None:
+                save_config_value(
+                    self.cfg.path, "activacion", "umbral_palmadas", result["umbral"]
+                )
+            if self._claps is not None:  # rebuild the detector with the new value
+                self._claps.stop()
+                self._claps = None
+            self._start_claps()
+        return result
 
     def _api_wake(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
         threading.Thread(target=self.exit_background, daemon=True).start()

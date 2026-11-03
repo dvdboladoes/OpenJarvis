@@ -78,6 +78,8 @@ personalizar: "pon mi canción favorita" → la buscas en RECUERDOS.
 - Correo: redactar_correo prepara el borrador y te pide confirmación antes de \
 enviarlo. Escribe el correo completo y bien redactado.
 - Nunca digas que no puedes controlar el ordenador: sí puedes.
+- [Hora actual] y [Acciones hechas] son notas internas: no menciones la hora \
+salvo que te la pregunten, y usa las acciones para saber qué hiciste.
 - Si no existe ninguna herramienta para lo que pide, dilo en vez de inventar.
 """
 
@@ -189,11 +191,26 @@ TOOLS: List[dict] = [
         ["nivel"],
     ),
     _tool(
+        "mostrar_imagen",
+        "Enseña imágenes de algo abriendo una búsqueda de imágenes en el "
+        "navegador. Úsala para «ponme / enséñame una imagen de…».",
+        {"busqueda": _S},
+        ["busqueda"],
+    ),
+    _tool(
         "fondo_pantalla",
-        "Cambia el fondo de pantalla: un tema a buscar (en inglés da mejores "
-        "resultados, p. ej. 'mountains at sunset'), una URL de imagen o una ruta.",
+        "Cambia el FONDO DE PANTALLA del escritorio. Solo si lo pide con esas "
+        "palabras (fondo, escritorio, wallpaper). Acepta un tema a buscar (en "
+        "inglés da mejores resultados, p. ej. 'mountains at sunset'), una URL "
+        "de imagen o una ruta.",
         {"imagen": _S},
         ["imagen"],
+    ),
+    _tool(
+        "restaurar_fondo",
+        "Vuelve a poner el fondo de pantalla original del usuario, o el de "
+        "Windows si pide «el predeterminado».",
+        {"predeterminado_de_windows": {"type": "boolean"}},
     ),
     _tool(
         "modo_oscuro",
@@ -209,6 +226,13 @@ TOOLS: List[dict] = [
         ["apartado"],
     ),
     _tool("bloquear_pantalla", "Bloquea el ordenador.", {}),
+    _tool(
+        "apagar_jarvis",
+        "Apaga a Jarvis: 'segundo_plano' lo oculta y sigue escuchando las "
+        "palmadas y «Jarvis, enciéndete»; 'cerrar' lo cierra del todo.",
+        {"modo": {"type": "string", "enum": ["segundo_plano", "cerrar"]}},
+        ["modo"],
+    ),
     _tool(
         "temporizador",
         "Pone un temporizador o recordatorio que suena al acabar.",
@@ -271,9 +295,12 @@ FIRE_AND_FORGET = {
     "volumen",
     "brillo",
     "fondo_pantalla",
+    "mostrar_imagen",
+    "restaurar_fondo",
     "modo_oscuro",
     "abrir_ajustes",
     "bloquear_pantalla",
+    "apagar_jarvis",
     "temporizador",
     "recordar",
     "olvidar",
@@ -295,6 +322,7 @@ class ClaudeAgent:
         get_reply: Callable[[float], Optional[str]] = lambda _t: None,
         look_camera: Callable[[], Optional[str]] = lambda: None,
         add_timer: Callable[[int, str], None] = lambda _s, _l: None,
+        power: Callable[[str], None] = lambda _mode: None,
         hide_hud: Callable[[], None] = lambda: None,
         show_hud: Callable[[], None] = lambda: None,
         notify: Callable[..., None] = lambda *_a, **_k: None,
@@ -306,6 +334,7 @@ class ClaudeAgent:
         self.get_reply = get_reply
         self.look_camera = look_camera
         self.add_timer = add_timer
+        self.power = power
         self.hide_hud = hide_hud
         self.show_hud = show_hud
         self.notify = notify
@@ -405,10 +434,11 @@ class ClaudeAgent:
         messages = history + [
             {
                 "role": "user",
-                "content": f"(Son las {time.strftime('%H:%M')}) {user_text}",
+                "content": f"[Hora actual: {time.strftime('%H:%M')}] {user_text}",
             }
         ]
         spoken: List[str] = []
+        self._done: List[str] = []
         for _step in range(self.MAX_STEPS):
             if self._cancelled():
                 break
@@ -432,6 +462,9 @@ class ClaudeAgent:
             messages.append({"role": "user", "content": results})
         reply = " ".join(spoken).strip()
         self.last_reply = reply
+        if self._done:
+            # Kept in the history (not spoken): what Jarvis actually did.
+            reply += " [Acciones hechas: " + "; ".join(self._done) + "]"
         if remember and reply and not self._cancelled():
             self.brain._remember(user_text, reply)  # noqa: SLF001
 
@@ -483,6 +516,8 @@ class ClaudeAgent:
             try:
                 result = yield from self._run_tool(name, args)
                 is_error = False
+                if isinstance(result, str):
+                    self._done.append(f"{name}: {result[:120]}")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Herramienta %s falló: %s", name, exc)
                 result, is_error = f"Error: {exc}", True
@@ -544,12 +579,24 @@ class ClaudeAgent:
             return winctl.set_brightness(int(a["nivel"]))
         if name == "fondo_pantalla":
             return winctl.set_wallpaper(str(a["imagen"]))
+        if name == "restaurar_fondo":
+            return winctl.restore_wallpaper(bool(a.get("predeterminado_de_windows")))
+        if name == "mostrar_imagen":
+            q = quote_plus(str(a["busqueda"]))
+            self.open_url(f"https://www.google.com/search?tbm=isch&q={q}")
+            return "Imágenes abiertas en el navegador."
+
         if name == "modo_oscuro":
             return winctl.set_theme(bool(a["activar"]))
         if name == "abrir_ajustes":
             return winctl.open_settings(str(a["apartado"]))
         if name == "bloquear_pantalla":
             return winctl.lock_screen()
+        if name == "apagar_jarvis":
+            mode = "quit" if a.get("modo") == "cerrar" else "background"
+            self.power(mode)
+            return "Hecho: en cuanto termines de hablar."
+
         if name == "temporizador":
             self.add_timer(
                 max(1, int(a["segundos"])), str(a.get("etiqueta") or "aviso")

@@ -40,30 +40,38 @@ class _Candidate:
 class ClapDetector:
     """Detect two sharp claps in quick succession.
 
-    A clap is a loud, very short transient: the 10 ms peak jumps far above the
-    background level and the energy collapses again within ~70 ms. Speech and
-    music fail the second test because they stay loud. Two such transients
-    between ``min_gap`` and ``max_gap`` seconds apart trigger the detector.
+    A clap is a *sharp*, very short transient: the 10 ms peak jumps far
+    above the previous moment and the background, and the energy collapses
+    again within ~60 ms. Speech and music fail because they rise gradually
+    and stay loud. Two such transients between ``min_gap`` and ``max_gap``
+    seconds apart trigger the detector.
 
-    ``sensitivity`` (0–1) lowers the loudness and contrast thresholds.
+    Laptop microphones with noise suppression record claps quietly, so the
+    test is mostly about sharpness. ``threshold`` (from "Calibrar palmadas")
+    sets the minimum peak for this microphone; otherwise ``sensitivity`` (0–1)
+    picks one.
     """
 
     def __init__(
         self,
         sensitivity: float = 0.5,
         *,
+        threshold: float = 0.0,
         sample_rate: int = SAMPLE_RATE,
-        min_gap: float = 0.12,
-        max_gap: float = 0.9,
+        min_gap: float = 0.1,
+        max_gap: float = 1.0,
         cooldown: float = 2.0,
     ) -> None:
         s = max(0.0, min(1.0, float(sensitivity)))
         self.sample_rate = sample_rate
-        self.peak_threshold = 0.6 - 0.45 * s  # fraction of full scale
-        self.contrast = 9.0 - 6.0 * s  # peak vs. background RMS
-        self.decay_ratio = 0.3  # tail RMS must fall below peak * ratio
-        self.tail_windows = 7  # ~70 ms of tail to confirm a transient
+        # Minimum 10 ms peak (fraction of full scale).
+        self.peak_threshold = threshold if threshold > 0 else 0.03 - 0.022 * s
+        self.contrast = 14.0 - 8.0 * s  # peak vs. background RMS
+        self.attack = 4.0  # peak vs. the window just before: claps are sudden
+        self.decay_ratio = 0.4  # tail RMS must fall below peak * ratio
+        self.tail_windows = 6  # ~60 ms of tail to confirm a transient
         self.refractory = 0.08
+        self._prev_peak = 0.0
         self.min_gap = min_gap
         self.max_gap = max_gap
         self.cooldown = cooldown
@@ -110,9 +118,11 @@ class ClapDetector:
             return triggered
 
         # 2. Look for a new onset.
+        prev, self._prev_peak = self._prev_peak, peak
         is_onset = (
             peak >= self.peak_threshold
             and peak >= self._background * self.contrast
+            and peak >= max(prev, 1e-4) * self.attack
             and (self._t - self._last_onset) >= self.refractory
         )
         if is_onset:
@@ -135,6 +145,41 @@ class ClapDetector:
             return True
         self._claps.append(t)
         return False
+
+
+def calibrate_claps(samples: "object", sample_rate: int = SAMPLE_RATE) -> dict:
+    """Find the claps in a few seconds of audio and suggest a threshold.
+
+    Returns ``{"palmadas": n, "umbral": float}``; ``umbral`` is 0 when no clap
+    was heard. Used by Ajustes → "Calibrar palmadas".
+    """
+    import numpy as np
+
+    x = np.asarray(samples, dtype=np.float32).reshape(-1)
+    if x.dtype != np.float32 or np.max(np.abs(x)) > 1.5:
+        x = x / _FULL_SCALE
+    n = len(x) // _WINDOW
+    if n < 10:
+        return {"palmadas": 0, "umbral": 0.0}
+    w = x[: n * _WINDOW].reshape(n, _WINDOW)
+    peaks = np.abs(w).max(axis=1)
+    rms = np.sqrt((w * w).mean(axis=1))
+    noise = float(np.median(rms)) + 1e-5
+    found = []
+    i = 1
+    while i < n - 6:
+        sharp = peaks[i] >= 4 * max(peaks[i - 1], 1e-4)
+        loud = peaks[i] >= 20 * noise
+        decays = float(rms[i + 2 : i + 6].mean()) < peaks[i] * 0.4
+        if sharp and loud and decays:
+            found.append(float(peaks[i]))
+            i += 8  # skip this clap's tail
+        else:
+            i += 1
+    if not found:
+        return {"palmadas": 0, "umbral": 0.0}
+    claps = sorted(found)[-3:]
+    return {"palmadas": len(found), "umbral": round(0.45 * float(np.median(claps)), 4)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -292,5 +337,6 @@ __all__ = [
     "SAMPLE_RATE",
     "ClapDetector",
     "MicListener",
+    "calibrate_claps",
     "WakeWordDetector",
 ]

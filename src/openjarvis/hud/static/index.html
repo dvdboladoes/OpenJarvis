@@ -373,6 +373,7 @@ body.bg .sleep { display: grid; }
         <div class="sect"><h3>Voz</h3><div class="voices" id="voices"></div><p class="note">Toca una voz para escucharla. Las «multilingües» son las más naturales.</p></div>
         <div id="settings"></div>
         <div class="sect"><h3>Aplicación</h3><div class="card">
+          <div class="row"><div class="lbl">Calibrar palmadas<small>Pulsa y da 3 palmadas en 5 segundos: Jarvis aprende cómo suenan en tu micrófono.</small></div><button class="btn" id="b-claps">Calibrar</button></div>
           <div class="row"><div class="lbl">Arrancar con Windows<small>Se inicia oculto y se despierta con palmadas o «Jarvis, enciéndete».</small></div><button class="switch" id="sw-autostart" aria-label="Arrancar con Windows"></button></div>
           <div class="row"><div class="lbl">Borrar la conversación<small>Jarvis olvida lo hablado. Los recuerdos de Memoria se mantienen.</small></div><button class="btn bad" id="b-forget">Borrar</button></div>
           <div class="row"><div class="lbl">Actualizar Jarvis<small id="version">Descarga la última versión y se reinicia solo.</small></div><button class="btn" id="b-update">Actualizar</button></div>
@@ -570,7 +571,8 @@ body.bg .sleep { display: grid; }
     brillo: (d) => `Brillo al ${d.nivel} %`, fondo_pantalla: (d) => `Fondo de pantalla · ${d.imagen || ""}`, modo_oscuro: (d) => d.activar ? "Modo oscuro" : "Modo claro",
     abrir_ajustes: (d) => `Ajustes · ${d.apartado || ""}`, bloquear_pantalla: () => "Bloqueando el PC", temporizador: (d) => `Temporizador · ${d.etiqueta || ""}`,
     recordar: () => "Guardado en memoria", olvidar: () => "Olvidando", mirar_pantalla: () => "Mirando tu pantalla", mirar_camara: () => "Mirando por la cámara",
-    usar_pantalla: () => "Manejando el ordenador", redactar_correo: (d) => `Correo para ${d.para || ""}`, ejecutar_comando: () => "Preparando un comando",
+    usar_pantalla: () => "Manejando el ordenador", mostrar_imagen: (d) => `Imágenes de ${d.busqueda || ""}`,
+    restaurar_fondo: () => "Restaurando el fondo", apagar_jarvis: (d) => d.modo === "cerrar" ? "Cerrando Jarvis" : "Segundo plano", redactar_correo: (d) => `Correo para ${d.para || ""}`, ejecutar_comando: () => "Preparando un comando",
   };
   function activity(text, ms = 3500) {
     const el = document.createElement("div"); el.className = "act"; el.innerHTML = `<span class="ring"></span><span>${esc(text)}</span>`;
@@ -581,12 +583,40 @@ body.bg .sleep { display: grid; }
 
   // ── hearing: Edge / Chrome speech recognition ─────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null, recOn = false, want = false, sent = false, timer = 0, silence = 700, lastHeard = 0;
+  let rec = null, recOn = false, want = false, sent = false, timer = 0, silence = 550, lastHeard = 0;
+  // While Jarvis talks the page keeps listening ("barge" mode) to tell your
+  // voice apart from his own echo; when you speak, it cuts him off at once.
+  let barge = false, bargeFrom = -1, spokenByJarvis = "";
+  const STOP_WORDS = /^(para|calla|callate|espera|stop|basta|jarvis|oye|vale|no)$/;
+  const fold = (x) => String(x).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9ñ ]/g, " ");
+  function knownWords() {
+    const set = new Set(); fold(spokenByJarvis).split(/\s+/).forEach((w) => { if (w.length > 2) { set.add(w); set.add(w.slice(0, 4)); } });
+    return set;
+  }
+  // Index where *your* words start in the transcript, or -1 if it is only echo.
+  function userStart(words) {
+    const known = knownWords(); let run = 0;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i]; if (w.length <= 2 && !STOP_WORDS.test(w)) continue;
+      const mine = !known.has(w) && !known.has(w.slice(0, 4));
+      if (mine && STOP_WORDS.test(w) && words.length - i <= 3) return i;  // "¡para!", "espera"
+      run = mine ? run + 1 : 0;
+      if (run >= 2) { let j = i; while (j > 0 && (words[j - 1].length <= 2 || !known.has(words[j - 1]))) j--; return j; }
+    }
+    return -1;
+  }
+  function setBarge(on) {
+    if (on === barge) return;
+    barge = on;
+    // Start from a clean transcript: drop your previous sentence (when Jarvis
+    // starts) or his echo (when he finishes without being interrupted).
+    if (bargeFrom < 0 && rec && recOn) { try { rec.abort(); } catch (_) {} }
+  }
   // Words that mean "I haven't finished": wait a little longer before sending.
   const OPEN = /^(y|o|que|de|del|la|el|los|las|un|una|unos|con|para|por|pero|en|a|al|mi|mis|tu|su|como|si|porque|cuando|donde|es|eh|em|mmm|este|esto|pues|entonces|tambien|también|me|le|se)$/i;
   function recBuild() {
     rec = new SR(); rec.lang = "es-ES"; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
-    rec.onstart = () => { recOn = true; };
+    rec.onstart = () => { recOn = true; if (!barge) bargeFrom = -1; };
     rec.onend = () => { recOn = false; if (want && micOn) setTimeout(recStart, 60); };
     rec.onerror = (e) => {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") { want = false; toast(local ? "No tengo permiso para el micrófono en esta ventana." : "Chrome no deja usar el micrófono aquí. Mira el apartado Remoto, paso 3.", 9000); }
@@ -596,7 +626,13 @@ body.bg .sleep { display: grid; }
     rec.onresult = (e) => {
       let all = "", interim = "", final = false;
       for (let i = 0; i < e.results.length; i++) { const r = e.results[i]; all += r[0].transcript; if (r.isFinal) final = true; else if (i >= e.resultIndex) interim += r[0].transcript; }
-      const t = all.replace(/\s+/g, " ").trim(); if (!t || sent) return;
+      let t = all.replace(/\s+/g, " ").trim(); if (!t || sent) return;
+      if (barge) {
+        const words = fold(t).split(/\s+/).filter(Boolean), from = userStart(words);
+        if (from < 0) return;  // only Jarvis' own voice
+        barge = false; bargeFrom = from; post("stop"); sfx.listen();
+      }
+      if (bargeFrom >= 0) { t = t.split(/\s+/).slice(bargeFrom).join(" "); if (!t) return; }
       lastHeard = performance.now(); mic = Math.max(mic, .6);
       if (background) { clearTimeout(timer); timer = setTimeout(() => recSend(t), 500); return; }
       if (state === "reposo") { state = "escuchando"; document.body.dataset.state = state; $("state").textContent = "ESCUCHANDO"; paint(); }
@@ -615,7 +651,7 @@ body.bg .sleep { display: grid; }
     try { rec.start(); } catch (_) {}
   }
   function recSend(t) {
-    if (sent) return; sent = true; clearTimeout(timer);
+    if (sent) return; sent = true; clearTimeout(timer); bargeFrom = -1;
     try { rec.abort(); } catch (_) {}
     post("heard", { text: t }).then((r) => { const res = result(r); sent = false; if (!(res && res.ok)) { if (want) recStart(); } });
   }
@@ -714,6 +750,11 @@ body.bg .sleep { display: grid; }
   }
   function loadConfig() { post("config").then((r) => { cfg = result(r); if (cfg) renderSettings(); }); }
   $("sw-autostart").onclick = () => { const on = !$("sw-autostart").classList.contains("on"); post("autostart", { on }).then((r) => { if (result(r)) { $("sw-autostart").classList.toggle("on", on); toast(on ? "Jarvis arrancará con Windows." : "Ya no arrancará con Windows."); } }); };
+  $("b-claps").onclick = () => { const b = $("b-claps"); b.disabled = true; b.textContent = "¡Da 3 palmadas!"; toast("Escuchando… da 3 palmadas secas.", 5500);
+    post("clap_calibrate").then((r) => { b.disabled = false; b.textContent = "Calibrar"; const res = result(r);
+      if (!res) toast((r && r.error) || "No se pudo usar el micrófono.");
+      else if (!res.umbral) toast("No he oído palmadas. Prueba más cerca del portátil.");
+      else toast(`Listo: he oído ${res.palmadas} palmadas. Ya las reconozco en tu micrófono.`, 6000); }); };
   $("b-forget").onclick = () => { if (confirm("¿Borrar toda la conversación? Los recuerdos de Memoria se mantienen.")) post("forget").then(() => { loadHistory(); }); };
   $("b-update").onclick = () => { if (confirm("Jarvis se cerrará, se actualizará y volverá a abrirse en un minuto.")) post("update").then((r) => { if (!result(r)) toast((r && r.error) || "No se pudo actualizar."); }); };
   $("b-quit").onclick = () => { if (confirm("¿Cerrar Jarvis del todo?")) { quitting = true; post("quit"); } };
@@ -749,8 +790,8 @@ body.bg .sleep { display: grid; }
       case "wake": burst = 1; three.shock(); setTimeout(() => three.shock(), 170); sfx.wake(); show("home"); break;
       case "level": if (ev.source === "voz") voice = Math.max(voice, ev.value); else mic = Math.max(mic, ev.value); break;
       case "mood": mood = ev.mood || "neutral"; paint(); break;
-      case "partial": if (ev.role === "jarvis") showJarvis(ev.text); else setYou(ev.text); break;
-      case "message": if (ev.role === "jarvis") { showJarvis(ev.text); } else { setYou(ev.text); jarvisText = ""; $("jarvis").innerHTML = ""; } chatAppend(ev.role, ev.text); break;
+      case "partial": if (ev.role === "jarvis") { showJarvis(ev.text); spokenByJarvis = ev.text; } else setYou(ev.text); break;
+      case "message": if (ev.role === "jarvis") { showJarvis(ev.text); spokenByJarvis = ev.text; } else { setYou(ev.text); jarvisText = ""; $("jarvis").innerHTML = ""; spokenByJarvis = ""; } chatAppend(ev.role, ev.text); break;
       case "confirm": $("confirm-q").textContent = ev.pregunta || ""; $("confirm").classList.toggle("on", !!ev.pregunta); break;
       case "snapshot": if (ev.tiempo) { const m = ev.tiempo.match(/[+-]?\d+\s*°C/); $("w-t").textContent = m ? m[0].replace(/\s/g, "") : ""; $("w-c").textContent = " " + ev.tiempo.split(",")[0]; $("weather").classList.remove("hidden"); } break;
       case "system": { const set = (k, v, t) => { $("g-" + k).style.width = Math.max(0, Math.min(100, v || 0)) + "%"; $("v-" + k).textContent = t; };
@@ -758,7 +799,7 @@ body.bg .sleep { display: grid; }
         if (ev.bateria != null) { set("bat", ev.bateria, ev.bateria + "%"); $("l-bat").textContent = ev.cargando ? "CARGA" : "BAT"; } else set("bat", 100, "AC"); break; }
       case "mic": micOn = !!ev.on; if (!micOn) recStop(); $("b-mic").classList.toggle("mic-off", !micOn); $("b-mic").querySelector(".tip").textContent = micOn ? "Micrófono encendido" : "Micrófono apagado"; break;
       case "status": if (ev.silencio) silence = Math.round(ev.silencio * 1000); if (ev.motor === "") toast("El cerebro de IA no responde. Revisa tu clave de Claude.", 9000); break;
-      case "listen": (ev.on && micOn) ? recStart() : recStop(); break;
+      case "listen": if (ev.on && micOn) { setBarge(!!ev.barge); recStart(); } else { barge = false; recStop(); } break;
       case "notice": toast(ev.text, 7000); break;
       case "alarm": sfx.alarm(); toast(`⏰ ${ev.label}: ¡tiempo!`, 9000); break;
       case "camera": ev.on ? camOn() : camOff(); break;
@@ -767,6 +808,7 @@ body.bg .sleep { display: grid; }
       case "timing": $("timing").textContent = `⏱ ${ev.total}s · cerebro ${ev.cerebro}s · voz ${ev.voz}s`; break;
       case "tool": activity((TOOL[ev.nombre] || (() => "Trabajando…"))(ev.datos || {}), ev.nombre === "usar_pantalla" ? 6000 : 3200); break;
       case "pc": activity(ev.texto || "Hecho"); break;
+      case "claps": activity("👏 Palmadas", 1800); break;
       case "computer": if (ev.on) activity("Manejando el ordenador…", 8000); else sfx.done(); break;
       case "memory": if (view === "memory") renderMemory(ev.items || []); break;
       case "background": background = !!ev.on; document.body.classList.toggle("bg", background); if (!background) $("confirm").classList.remove("on"); break;

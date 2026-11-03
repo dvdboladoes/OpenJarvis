@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 LevelFn = Callable[[float], None]
 
 # Seconds without audio before sending a backup voice request (see _pump).
-HEDGE_AFTER = (0.7, 1.3)
+HEDGE_AFTER = (0.55, 1.1)
 
 
 # How each emotion colours the voice: (speed multiplier, pitch Hz, volume %).

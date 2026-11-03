@@ -61,7 +61,7 @@ motor = "navegador"
 modelo = "auto"
 # Segundos callado antes de enviar la frase (solo con "navegador").
 # Menos = responde antes, pero si haces pausas largas te puede cortar.
-silencio = 0.7
+silencio = 0.55
 
 [cerebro]
 # Vacío = el modelo local por defecto (Ollama). Para un Jarvis mucho más
@@ -146,6 +146,7 @@ class HudConfig:
     palmadas: bool = True
     palabra_clave: bool = True
     sensibilidad_palmadas: float = 0.35
+    umbral_palmadas: float = 0.0  # set by Ajustes → "Calibrar palmadas"
     sensibilidad_palabra: float = 0.5
     briefing_al_despertar: bool = False
 
@@ -158,7 +159,7 @@ class HudConfig:
 
     motor_oido: str = "navegador"
     modelo_oido: str = "auto"
-    silencio: float = 0.7
+    silencio: float = 0.55
 
     modelo: str = ""
     motor_cerebro: str = "auto"
@@ -249,6 +250,9 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.sensibilidad_palabra = _clamp(
         activ.get("sensibilidad_palabra", d.sensibilidad_palabra), 0.05, 0.95, 0.5
     )
+    d.umbral_palmadas = _clamp(
+        activ.get("umbral_palmadas", d.umbral_palmadas), 0.0, 1.0, 0.0
+    )
     d.briefing_al_despertar = bool(
         activ.get("briefing_al_despertar", d.briefing_al_despertar)
     )
@@ -262,7 +266,7 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
 
     d.motor_oido = str(oido.get("motor", d.motor_oido) or "navegador").lower()
     d.modelo_oido = str(oido.get("modelo", d.modelo_oido) or "auto")
-    d.silencio = _clamp(oido.get("silencio", d.silencio), 0.3, 2.0, 0.7)
+    d.silencio = _clamp(oido.get("silencio", d.silencio), 0.3, 2.0, 0.55)
 
     d.modelo = str(cerebro.get("modelo", d.modelo) or "")
     d.motor_cerebro = str(cerebro.get("motor", d.motor_cerebro) or "auto")

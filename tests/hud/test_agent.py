@@ -169,7 +169,14 @@ def test_fire_and_forget_tool_ends_the_turn(tmp_path) -> None:
     assert req["extra_body"]["thinking"] == {"type": "disabled"}
     assert req["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert any(t.get("type") == "web_search_20250305" for t in req["tools"])
-    assert saved == [("abre Stripe", "Ahora mismo se lo abro, señor.")]
+    # The history also records what was done (not spoken), for later turns.
+    assert saved == [
+        (
+            "abre Stripe",
+            "Ahora mismo se lo abro, señor. [Acciones hechas: "
+            "abrir_web: Abierta https://dashboard.stripe.com]",
+        )
+    ]
 
 
 def test_memory_tool_and_silent_call_says_done(tmp_path) -> None:
@@ -304,3 +311,41 @@ def test_prepared_phrases_lose_their_silence() -> None:
     out = trim_silence([quiet, voice, quiet], rate)
     assert len(out) < rate  # was 2.5 s, now ~0.6 s
     assert len(out) >= rate // 2
+
+
+@pytest.mark.parametrize(
+    ("text", "want"),
+    [
+        ("Apágate", "background"),
+        ("Jarvis, ponte en segundo plano", "background"),
+        ("descansa", "background"),
+        ("ciérrate del todo", "quit"),
+        ("apaga la luz", None),
+        ("¿Qué es el segundo plano en fotografía y cómo se usa en un retrato?", None),
+    ],
+)
+def test_power_commands(text: str, want) -> None:
+    from openjarvis.hud.brain import power_command
+
+    assert power_command(text) == want
+
+
+def test_own_echo_is_ignored() -> None:
+    import time
+
+    from openjarvis.hud.assistant import JarvisAssistant
+
+    a = JarvisAssistant(
+        HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
+    )
+    try:
+        a._said_text = (
+            "La Luna se formó tras el choque de un cuerpo del tamaño de Marte."  # noqa: SLF001
+        )
+        a._said_at = time.monotonic()  # noqa: SLF001
+        assert a._is_own_echo("el choque de un cuerpo del tamaño")  # noqa: SLF001
+        assert not a._is_own_echo("pon música de los Beatles")  # noqa: SLF001
+        a._said_at -= 10  # noqa: SLF001
+        assert not a._is_own_echo("el choque de un cuerpo del tamaño")  # noqa: SLF001
+    finally:
+        a.server._httpd.server_close()  # noqa: SLF001

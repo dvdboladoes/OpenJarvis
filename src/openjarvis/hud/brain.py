@@ -358,6 +358,35 @@ def clean_for_speech(text: str) -> str:
     return text.strip()
 
 
+_BACKGROUND_RE = re.compile(
+    r"\b(?:apagate|apaga(?:te)? jarvis|desconectate|duermete|vete a dormir|"
+    r"a dormir|descansa|ponte en segundo plano|pasa a segundo plano|"
+    r"(?:vete|ve|quedate|metete) (?:a|en) segundo plano|segundo plano|"
+    r"escondete|ocultate|minimizate|retirate)\b"
+)
+_QUIT_RE = re.compile(
+    r"\b(?:cierrate|cierra jarvis|apagate del todo|apagate por completo|"
+    r"sal del todo|salte del todo|cierra la aplicacion|apaga la aplicacion)\b"
+)
+
+
+def power_command(text: str) -> Optional[str]:
+    """ "background" for «apágate» / «ponte en segundo plano», "quit" for
+    «ciérrate del todo», else None."""
+    import unicodedata
+
+    t = unicodedata.normalize("NFKD", text.lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = " ".join(re.sub(r"[^a-z ]", " ", t).split())
+    if len(t.split()) > 9:
+        return None  # a long sentence that merely mentions it
+    if _QUIT_RE.search(t):
+        return "quit"
+    if _BACKGROUND_RE.search(t):
+        return "background"
+    return None
+
+
 def is_sleep_command(text: str) -> bool:
     t = re.sub(r"[^\wáéíóúñü ]", "", text.lower()).strip()
     return any(p in t for p in SLEEP_PHRASES)

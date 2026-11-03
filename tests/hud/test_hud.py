@@ -1030,12 +1030,12 @@ def test_claude_speed_options() -> None:
 
 def test_speed_settings_in_config() -> None:
     cfg = parse_hud_config({})
-    assert cfg.pensar is False and cfg.silencio == 0.7
+    assert cfg.pensar is False and cfg.silencio == 0.55
     cfg = parse_hud_config({"cerebro": {"pensar": True}, "oido": {"silencio": 5}})
     assert cfg.pensar is True and cfg.silencio == 2.0
     data = tomllib.loads(DEFAULT_TEMPLATE)
     assert data["cerebro"]["pensar"] is False
-    assert data["oido"]["silencio"] == 0.7
+    assert data["oido"]["silencio"] == 0.55
 
 
 def _anthropic_engine():
@@ -1176,3 +1176,34 @@ def test_mp3_decoder_decodes_chunks_as_they_arrive() -> None:
     assert {rate for _, rate in chunks} == {24000}
     assert 23000 < total < 26500
     assert all(pcm.dtype == np.float32 for pcm, _ in chunks)
+
+
+def _speechlike(seconds: float, seed: int = 3) -> "np.ndarray":
+    """Syllables: loud noise bursts that swell over ~60 ms and stay ~150 ms."""
+    rng = np.random.default_rng(seed)
+    n = int(SR * seconds)
+    t = np.arange(n) / SR
+    env = np.clip(np.sin(2 * np.pi * 4.5 * t), 0, None) ** 1.5
+    return rng.normal(0, 1, n) * env * 9000
+
+
+def test_quiet_laptop_mic_still_hears_claps() -> None:
+    """Mics with noise suppression record claps at ~5 % of full scale."""
+    quiet = [_noise(1, amp=3), _clap() * 0.06, _noise(0.4, amp=3), _clap(2) * 0.06]
+    assert _triggers(np.concatenate(quiet + [_noise(1, amp=3)])) == 1
+
+
+def test_speech_is_not_a_clap() -> None:
+    assert _triggers(np.concatenate([_noise(0.5), _speechlike(3), _noise(0.5)])) == 0
+
+
+def test_clap_calibration_suggests_a_threshold() -> None:
+    from openjarvis.hud.triggers import calibrate_claps
+
+    parts = [_noise(0.8, amp=3)]
+    for seed in (1, 2, 4):
+        parts += [_clap(seed) * 0.08, _noise(0.7, amp=3)]
+    res = calibrate_claps(np.concatenate(parts).astype(np.float32) / 32768.0)
+    assert res["palmadas"] == 3
+    assert 0.01 < res["umbral"] < 0.08
+    assert calibrate_claps(_noise(3, amp=3).astype(np.float32) / 32768.0)["umbral"] == 0
