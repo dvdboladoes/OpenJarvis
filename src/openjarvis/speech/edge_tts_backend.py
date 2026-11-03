@@ -22,12 +22,12 @@ DEFAULT_VOICE = "es-ES-AlvaroNeural"
 
 # (voice id, label shown in the Jarvis HUD voice picker)
 SPANISH_VOICES = [
-    ("en-US-AndrewMultilingualNeural", "Andrew · cálido y seguro (la más humana)"),
-    ("en-US-BrianMultilingualNeural", "Brian · cercano y natural"),
+    ("en-US-BrianMultilingualNeural", "Brian · cercano y natural (recomendada)"),
     ("en-AU-WilliamMultilingualNeural", "William · simpático y positivo"),
+    ("es-ES-AlvaroNeural", "Álvaro · España, la más rápida"),
     ("en-US-EmmaMultilingualNeural", "Emma · alegre y conversadora"),
     ("en-US-AvaMultilingualNeural", "Ava · expresiva y amable"),
-    ("es-ES-AlvaroNeural", "Álvaro · España"),
+    ("en-US-AndrewMultilingualNeural", "Andrew · cálido (a veces falla)"),
     ("es-ES-XimenaNeural", "Ximena · España"),
     ("es-ES-ElviraNeural", "Elvira · España"),
     ("es-MX-JorgeNeural", "Jorge · México"),

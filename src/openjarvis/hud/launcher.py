@@ -165,6 +165,46 @@ def remove_autostart() -> bool:
     return False
 
 
+API_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "ELEVENLABS_API_KEY",
+    "ELEVENLABS_VOICE_ID",
+)
+
+
+def load_user_keys() -> List[str]:
+    """Read API keys saved with ``setx`` that this process did not inherit.
+
+    A program started from an old Explorer, a shortcut or another app may not
+    see keys added later with ``setx``; Windows keeps them in the user's
+    registry ("Environment" under HKEY_CURRENT_USER), so read them there.
+    """
+    if sys.platform != "win32":
+        return []
+    import winreg
+
+    loaded = []
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment")
+    except OSError:
+        return []
+    with key:
+        for name in API_KEYS:
+            if os.environ.get(name):
+                continue
+            try:
+                value, _kind = winreg.QueryValueEx(key, name)
+            except OSError:
+                continue
+            if isinstance(value, str) and value.strip():
+                os.environ[name] = value.strip()
+                loaded.append(name)
+    return loaded
+
+
 def autostart_installed() -> bool:
     folder = _startup_dir()
     return bool(folder and (folder / STARTUP_NAME).exists())
@@ -340,6 +380,7 @@ __all__ = [
     "autostart_installed",
     "find_uv",
     "install_autostart",
+    "load_user_keys",
     "local_addresses",
     "open_window",
     "remove_autostart",

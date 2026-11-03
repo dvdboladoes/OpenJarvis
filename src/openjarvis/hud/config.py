@@ -44,7 +44,7 @@ briefing_al_despertar = false
 
 [voz]
 motor = "edge"                    # "edge" (gratis), "elevenlabs", "openai_tts"...
-voz = "en-US-AndrewMultilingualNeural"  # la más natural; cámbiala en Ajustes
+voz = "en-US-BrianMultilingualNeural"  # natural y fiable; cámbiala en Ajustes
 velocidad = 1.05
 tono = 2                          # Tono de la voz en Hz (-10 grave … 15 agudo)
 idioma_escucha = "es"             # Idioma que entiende al escucharte
@@ -149,7 +149,7 @@ class HudConfig:
     briefing_al_despertar: bool = False
 
     motor_voz: str = "edge"
-    voz: str = "en-US-AndrewMultilingualNeural"
+    voz: str = "en-US-BrianMultilingualNeural"
     velocidad: float = 1.05
     tono: int = 2
     idioma_escucha: str = "es"

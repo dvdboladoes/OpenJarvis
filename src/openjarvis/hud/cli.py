@@ -94,6 +94,10 @@ def hud(
 ) -> None:
     _redirect_headless_output()
 
+    from openjarvis.hud.launcher import load_user_keys
+
+    load_user_keys()  # keys saved with setx, even if this process missed them
+
     from rich.console import Console
 
     from openjarvis.hud.config import ensure_config_file, load_hud_config

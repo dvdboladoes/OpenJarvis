@@ -156,43 +156,46 @@ class Speaker:
             self._attempted.clear()
         if voz:
             self.cfg.voz = voz
+        self._cache.clear()  # prepared phrases were in the old voice
 
     def synthesize(self, text: str, mood: str = "") -> Optional[bytes]:
         mood = mood or getattr(text, "mood", "") or "neutral"
         while (backend := self._resolve()) is not None:
             backend_id = getattr(backend, "backend_id", "")
-            try:
-                kwargs: dict = {"output_format": "wav", "speed": self.cfg.velocidad}
-                voice = self._voice_for(backend)
-                if voice:
-                    kwargs["voice_id"] = voice
-                say = str(text)
-                if backend_id == "edge":
-                    speed, pitch, volume = prosody_for(
-                        mood, self.cfg.velocidad, self.cfg.tono
-                    )
-                    kwargs.update(speed=speed, pitch=pitch, volume=volume)
-                elif backend_id == "elevenlabs":
-                    model = getattr(backend, "_model", "") or ""
-                    tag = MOOD_ELEVEN_TAGS.get(mood)
-                    if tag and "v3" in model:
-                        say = f"{tag} {say}"
-                result = backend.synthesize(say, **kwargs)
-                if result.audio:
-                    if self.on_mp3 is not None and result.format == "mp3":
-                        self.on_mp3(result.audio)
-                    return result.audio
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Voz %r falló: %s", backend_id or "?", exc)
-                # An unknown voice id should not kill speech: retry once with
-                # the backend's default voice before moving to another engine.
-                if backend_id == "edge" and self.cfg.voz:
-                    from openjarvis.speech.edge_tts_backend import DEFAULT_VOICE
+            voices = [self._voice_for(backend)]
+            if backend_id == "edge":
+                from openjarvis.speech.edge_tts_backend import DEFAULT_VOICE
 
-                    if self.cfg.voz != DEFAULT_VOICE:
-                        logger.warning("Uso la voz %s", DEFAULT_VOICE)
-                        self.cfg.voz = DEFAULT_VOICE
-                        continue
+                # Microsoft's service now and then sends no audio for a
+                # sentence: retry the same voice, then use the default voice
+                # for this sentence only (the chosen voice is kept).
+                voices = [voices[0], voices[0], DEFAULT_VOICE]
+            for voice in voices:
+                try:
+                    kwargs: dict = {
+                        "output_format": "wav",
+                        "speed": self.cfg.velocidad,
+                    }
+                    if voice:
+                        kwargs["voice_id"] = voice
+                    say = str(text)
+                    if backend_id == "edge":
+                        speed, pitch, volume = prosody_for(
+                            mood, self.cfg.velocidad, self.cfg.tono
+                        )
+                        kwargs.update(speed=speed, pitch=pitch, volume=volume)
+                    elif backend_id == "elevenlabs":
+                        model = getattr(backend, "_model", "") or ""
+                        tag = MOOD_ELEVEN_TAGS.get(mood)
+                        if tag and "v3" in model:
+                            say = f"{tag} {say}"
+                    result = backend.synthesize(say, **kwargs)
+                    if result.audio:
+                        if self.on_mp3 is not None and result.format == "mp3":
+                            self.on_mp3(result.audio)
+                        return result.audio
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Voz %r falló: %s", voice or backend_id, exc)
             self._backend = None
         logger.warning("No hay motor de voz disponible (instala: pip install edge-tts)")
         return None
