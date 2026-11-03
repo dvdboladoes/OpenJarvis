@@ -71,15 +71,18 @@ que estar encendido). No puede tocar los ajustes del Chromebook.
 
 ## Velocidad
 
-Debajo de los subtítulos verás `⏱ total · cerebro · voz`: cuánto tardó la
-primera palabra desde que dejaste de hablar. Con Claude Haiku suele ser de
-1,5 a 2 s. Las acciones sencillas (abrir algo) se hacen en menos de 3 s.
-Buscar en internet tarda unos segundos más, y manejar la pantalla depende de
-la tarea.
-
-Si Jarvis te corta cuando haces pausas, sube **Silencio antes de responder**
-en Ajustes (por ejemplo a 0,8). Si quieres respuestas más pensadas, activa
-**Pensar antes de responder** (tarda ~1,5 s más).
+- En cuanto dejas de hablar, Jarvis suelta un «Mmm…» ya preparado (a los
+  ~0,7 s) y la respuesta llega enseguida (normalmente 1,5–3 s). Puedes
+  quitar el «Mmm…» en Ajustes → Voz.
+- **Te deja terminar:** mientras prepara la respuesta te sigue escuchando. Si
+  continúas la frase antes de que empiece a hablar, responde a la frase
+  entera. Si aun así te corta, sube «Silencio antes de responder».
+- La voz depende del servicio gratuito de Microsoft: si una frase tarda, Jarvis
+  pide otra copia y usa la primera que llega. William es natural y rápida;
+  Álvaro y Elvira (España) son las más rápidas.
+- Debajo de los subtítulos verás `⏱ total · cerebro · voz`.
+- Tu portátil influye: con juegos u otros programas pesados abiertos, todo va
+  más lento. La animación de Jarvis está aligerada y se para en segundo plano.
 
 ## Si algo falla
 

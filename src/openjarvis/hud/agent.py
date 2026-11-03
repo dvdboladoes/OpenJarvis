@@ -391,6 +391,17 @@ class ClaudeAgent:
         # The API needs alternating turns starting with the user.
         while history and history[0]["role"] != "user":
             history.pop(0)
+        if history:
+            # Cache the conversation so far too: next turn only the new
+            # question is read from scratch (a few tenths of a second less).
+            last = history[-1]
+            last["content"] = [
+                {
+                    "type": "text",
+                    "text": last["content"],
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
         messages = history + [
             {
                 "role": "user",
@@ -421,7 +432,7 @@ class ClaudeAgent:
             messages.append({"role": "user", "content": results})
         reply = " ".join(spoken).strip()
         self.last_reply = reply
-        if remember and reply:
+        if remember and reply and not self._cancelled():
             self.brain._remember(user_text, reply)  # noqa: SLF001
 
     def _stream_once(

@@ -44,9 +44,10 @@ briefing_al_despertar = false
 
 [voz]
 motor = "edge"                    # "edge" (gratis), "elevenlabs", "openai_tts"...
-voz = "en-US-BrianMultilingualNeural"  # natural y fiable; cámbiala en Ajustes
+voz = "en-AU-WilliamMultilingualNeural"  # natural y rápida; cámbiala en Ajustes
 velocidad = 1.05
 tono = 2                          # Tono de la voz en Hz (-10 grave … 15 agudo)
+acuse = true                      # Dice «Mmm…» al instante mientras piensa
 idioma_escucha = "es"             # Idioma que entiende al escucharte
 
 [oido]
@@ -60,7 +61,7 @@ motor = "navegador"
 modelo = "auto"
 # Segundos callado antes de enviar la frase (solo con "navegador").
 # Menos = responde antes, pero si haces pausas largas te puede cortar.
-silencio = 0.6
+silencio = 0.7
 
 [cerebro]
 # Vacío = el modelo local por defecto (Ollama). Para un Jarvis mucho más
@@ -149,14 +150,15 @@ class HudConfig:
     briefing_al_despertar: bool = False
 
     motor_voz: str = "edge"
-    voz: str = "en-US-BrianMultilingualNeural"
+    voz: str = "en-AU-WilliamMultilingualNeural"
     velocidad: float = 1.05
     tono: int = 2
+    acuse: bool = True
     idioma_escucha: str = "es"
 
     motor_oido: str = "navegador"
     modelo_oido: str = "auto"
-    silencio: float = 0.6
+    silencio: float = 0.7
 
     modelo: str = ""
     motor_cerebro: str = "auto"
@@ -255,11 +257,12 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.voz = str(voz.get("voz", d.voz) or "")
     d.velocidad = _clamp(voz.get("velocidad", d.velocidad), 0.5, 2.0, 1.0)
     d.tono = int(_clamp(voz.get("tono", d.tono), -20, 20, 2))
+    d.acuse = bool(voz.get("acuse", d.acuse))
     d.idioma_escucha = str(voz.get("idioma_escucha", d.idioma_escucha) or "")
 
     d.motor_oido = str(oido.get("motor", d.motor_oido) or "navegador").lower()
     d.modelo_oido = str(oido.get("modelo", d.modelo_oido) or "auto")
-    d.silencio = _clamp(oido.get("silencio", d.silencio), 0.3, 2.0, 0.6)
+    d.silencio = _clamp(oido.get("silencio", d.silencio), 0.3, 2.0, 0.7)
 
     d.modelo = str(cerebro.get("modelo", d.modelo) or "")
     d.motor_cerebro = str(cerebro.get("motor", d.motor_cerebro) or "auto")
@@ -362,6 +365,14 @@ SETTINGS: List[Dict[str, Any]] = [
         "min": -10,
         "max": 15,
         "paso": 1,
+    },
+    {
+        "grupo": "Voz",
+        "seccion": "voz",
+        "clave": "acuse",
+        "attr": "acuse",
+        "tipo": "bool",
+        "etiqueta": "Respuesta instantánea: dice «Mmm…» mientras prepara la respuesta",
     },
     {
         "grupo": "Oído",

@@ -44,6 +44,13 @@ from openjarvis.hud.voice import Ear, Speaker
 
 logger = logging.getLogger(__name__)
 
+# Instant acknowledgement: if no answer is audible after this many seconds,
+# Jarvis says a short, prepared "Mmm…" while the real answer arrives.
+FILLER_AFTER = 0.45
+FILLERS = ("Mmm…", "Hmm…", "Mmm, mmm…")
+# What the microphone may pick up from those sounds (never a real request).
+FILLER_ECHOES = {"mmm", "mm", "hmm", "hm", "mmm mmm", "eh", "ah"}
+
 SNAPSHOT_MAX_AGE = 300  # seconds before the data is refreshed on wake
 SNAPSHOT_REFRESH = 900  # background refresh period
 
@@ -65,6 +72,15 @@ def voice_catalog() -> list:
     if os.environ.get("OPENAI_API_KEY"):
         voices.append({"motor": "openai_tts", "voz": "onyx", "nombre": "OpenAI · Onyx"})
     return voices
+
+
+def _fold_simple(text: str) -> str:
+    import re
+    import unicodedata
+
+    t = unicodedata.normalize("NFKD", text.lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^a-z ]", " ", t).split())
 
 
 _VERSION: Optional[str] = None
@@ -169,6 +185,8 @@ class JarvisAssistant:
         self.brain.cancel_event = self._cancel
         self.agent.cancel_event = self._cancel
         self._awaiting = False
+        self._spoke = False
+        self._question = ""
         self._replies: "queue.Queue[str]" = queue.Queue()
         self._background = False
         self._claps: Any = None
@@ -436,9 +454,19 @@ class JarvisAssistant:
         if not self._session.acquire(blocking=False):
             return False
         self._cancel.clear()
-        if self.listener is not None:
+        self._spoke = False
+        # The page keeps listening while Jarvis thinks, so you can finish your
+        # sentence; it stops only when Jarvis starts talking (_mute_ears).
+        if self.listener is not None and not self.browser_ears:
             self.listener.pause()
         return True
+
+    def _mute_ears(self) -> None:
+        """Jarvis is about to speak: stop listening so it never hears itself."""
+        if not self._spoke:
+            self._spoke = True
+            if self.listener is not None and self.browser_ears:
+                self.listener.pause()
 
     def _end(self) -> None:
         self.hub.publish("transcript", text="", final=True)
@@ -504,6 +532,26 @@ class JarvisAssistant:
             self.hub.publish("message", role="user", text=text)
             self._replies.put(text)
             return {"ok": True}
+        if (
+            self._session.locked()
+            and self._state == "pensando"
+            and not self._spoke
+            and self._question
+        ):
+            # You kept talking after a pause, before Jarvis said anything:
+            # drop that answer and reply to the whole sentence instead.
+            if _fold_simple(text) in FILLER_ECHOES:
+                return {"ok": True}  # the mic heard Jarvis' own "Mmm…"
+            whole = f"{self._question} {text}"
+            self._question = ""
+
+            def _restart() -> None:
+                if self.interrupt():
+                    self._t_heard = time.monotonic()
+                    self._on_text(whole)
+
+            threading.Thread(target=_restart, daemon=True).start()
+            return {"ok": True, "unido": True}
         if self._session.locked():
             return {"ok": False, "busy": True}
         self._t_heard = time.monotonic()
@@ -527,6 +575,7 @@ class JarvisAssistant:
             if not self._begin():
                 return
             try:
+                self._question = text
                 self.hub.publish("message", role="user", text=text)
                 if is_sleep_command(text):
                     self._say(
@@ -618,6 +667,7 @@ class JarvisAssistant:
             fallback=lambda: (
                 "Lo siento, mi motor de lenguaje no responde en este momento."
             ),
+            filler=True,
         )
 
     def _try_skill(self, text: str) -> bool:
@@ -773,7 +823,7 @@ class JarvisAssistant:
         else:
             self.hub.publish("notice", text=str(text))
 
-    def _say_stream(self, sentences: Any, fallback: Any) -> bool:
+    def _say_stream(self, sentences: Any, fallback: Any, filler: bool = False) -> bool:
         """Speak sentences as the model produces them.
 
         Three stages run in parallel: the model writes sentence N+2 while the
@@ -827,12 +877,16 @@ class JarvisAssistant:
 
         said: list[str] = []
         failed = False
+        filler = filler and self.cfg.acuse
         while True:
             try:
-                item = audio_q.get(timeout=0.2)
+                item = audio_q.get(timeout=0.05)
             except queue.Empty:
                 if self._cancel.is_set():
                     break  # interrupted: don't wait for the model to finish
+                if filler and not said and time.monotonic() - t_start > FILLER_AFTER:
+                    filler = False
+                    self._play_filler()
                 continue
             if item is done:
                 break
@@ -861,6 +915,7 @@ class JarvisAssistant:
                 self._set_state("hablando", "")
             self.hub.publish("partial", role="jarvis", text=" ".join(said))
             if audio and not self._cancel.is_set():
+                self._mute_ears()
                 try:
                     self.speaker.play(audio, self._voice_level)
                 except Exception as exc:  # noqa: BLE001
@@ -897,6 +952,7 @@ class JarvisAssistant:
         self._set_mood(mood)
         self.hub.publish("message", role="jarvis", text=str(text), mood=mood)
         self._set_state("hablando", "")
+        self._mute_ears()
         self.speaker.say(text, on_level=self._voice_level, mood=mood)
 
     def _engine_notice(self, exc: Exception) -> None:
@@ -1109,9 +1165,24 @@ class JarvisAssistant:
             "sereno",
         )
 
+    def _play_filler(self) -> None:
+        """A prepared "Mmm…" so the answer feels instant. The ears stay open:
+        you can still finish your sentence."""
+        ready = [f for f in FILLERS if self.speaker.is_ready(f)]
+        if not ready or self._cancel.is_set():
+            return
+        try:
+            self.speaker.play(
+                self.speaker.synthesize_streaming(random.choice(ready)),
+                self._voice_level,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("Muletilla no reproducida: %s", exc)
+
     def _prefetch_phrases(self) -> None:
         """Have the fixed phrases ready so waking up and "hecho" are instant."""
-        phrases = [Spoken(f"Hecho, {self.cfg.honorific}.", "alegre")]
+        phrases = [Spoken(f, "neutral") for f in FILLERS]
+        phrases.append(Spoken(f"Hecho, {self.cfg.honorific}.", "alegre"))
         phrases.append(self._background_phrase())
         for hour in (9, 16, 22):
             phrases += self._greetings(hour)

@@ -392,8 +392,10 @@ def test_splitter_reads_emotion_tags() -> None:
     sp = SentenceSplitter()
     out = sp.feed("[bromista] ¡Buon giorno, señor! Vaya energía. [serio] Ahora bien, ")
     out += sp.feed("tenemos tres reuniones.") + sp.flush()
+    # The first sentence is cut at its first comma so the voice starts sooner.
     assert [(str(o), o.mood) for o in out] == [
-        ("¡Buon giorno, señor!", "bromista"),
+        ("¡Buon giorno,", "bromista"),
+        ("señor!", "bromista"),
         ("Vaya energía.", "bromista"),
         ("Ahora bien, tenemos tres reuniones.", "serio"),
     ]
@@ -683,7 +685,7 @@ def test_stream_retries_when_model_copies_last_reply() -> None:
     b._sdk = SDK()  # noqa: SLF001
     b._model = "qwen3:1.7b"  # noqa: SLF001
     out = [str(x) for x in b.stream_reply("¿qué tal estás?")]
-    assert out == ["¡Muy bien, gracias por preguntar!"]
+    assert " ".join(out) == "¡Muy bien, gracias por preguntar!"
     assert calls[0] > calls[1]  # second try without history
 
 
@@ -1028,12 +1030,12 @@ def test_claude_speed_options() -> None:
 
 def test_speed_settings_in_config() -> None:
     cfg = parse_hud_config({})
-    assert cfg.pensar is False and cfg.silencio == 0.6
+    assert cfg.pensar is False and cfg.silencio == 0.7
     cfg = parse_hud_config({"cerebro": {"pensar": True}, "oido": {"silencio": 5}})
     assert cfg.pensar is True and cfg.silencio == 2.0
     data = tomllib.loads(DEFAULT_TEMPLATE)
     assert data["cerebro"]["pensar"] is False
-    assert data["oido"]["silencio"] == 0.6
+    assert data["oido"]["silencio"] == 0.7
 
 
 def _anthropic_engine():

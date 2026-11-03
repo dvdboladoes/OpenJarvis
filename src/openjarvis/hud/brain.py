@@ -382,6 +382,12 @@ class ActionRequest:
         )
 
 
+_GLUE = re.compile(
+    r"^(?:y|e|o|u|ni|que|de|del|la|el|los|las|lo|un|una|unos|unas|al|a|en|con|"
+    r"por|para|sin|su|sus|mi|mis|tu|tus|se|le|les|me|te|nos|es|muy|más|pero|"
+    r"como|si|cuando|donde|porque)$",
+    re.I,
+)
 _ACTION_RE = re.compile(r"<<\s*([a-záéíóú]+)\s*:\s*(.+?)\s*>>", re.I | re.S)
 
 
@@ -473,7 +479,8 @@ class SentenceSplitter:
         if self._emitted == 0 and not self._in_think:
             # Speak sooner: cut the very first sentence at a comma once it is
             # long enough, so the voice can start while the model keeps writing.
-            m = re.match(r"(.{28,}?[,;])\s+(?=\S)", self._buf)
+            # (16 characters counting the "[alegre] " tag: "¡Muy bien," is enough.)
+            m = re.match(r"(.{16,}?[,;])\s+(?=\S)", self._buf)
             if m and not re.search(r"[.!?…:]\s", m.group(1)):
                 cleaned = clean_for_speech(self._take_moods(m.group(1)))
                 self._buf = self._buf[m.end() :]
@@ -497,8 +504,37 @@ class SentenceSplitter:
             if cleaned:
                 self._emitted += 1
                 out.append(Spoken(cleaned, self.mood))
+        out += self._cut_long()
         self._buf += hold
         return out_actions + out
+
+    def _cut_long(self) -> List[str]:
+        """Speak a long stretch with no full stop yet in pieces.
+
+        The voice service only starts sending audio once it has synthesised
+        the whole piece, so a 120-character first sentence used to delay the
+        first word by 2 s or more. The first piece is cut after ~8 words.
+        """
+        limit = 55 if self._emitted == 0 else 160
+        if self._in_think or len(self._buf) <= limit:
+            return []
+        head = self._buf[:limit]
+        if "[" in head[-12:]:
+            return []  # an [emotion] tag may be half-received
+        cut = max(head.rfind(", "), head.rfind("; "))
+        if cut < 20 and self._emitted == 0:
+            cut = head.rfind(" ")
+            # Never stop right after "y", "de", "la"…: it sounds cut off.
+            while cut > 20 and _GLUE.match(head[head.rfind(" ", 0, cut) + 1 : cut]):
+                cut = head.rfind(" ", 0, cut)
+        if cut < 20:
+            return []
+        piece = clean_for_speech(self._take_moods(self._buf[: cut + 1]))
+        self._buf = self._buf[cut + 1 :].lstrip()
+        if not piece:
+            return []
+        self._emitted += 1
+        return [Spoken(piece, self.mood)]
 
     def flush(self) -> List[str]:
         actions, hold = self._take_actions()
@@ -510,7 +546,7 @@ class SentenceSplitter:
 class JarvisBrain:
     """Wraps the OpenJarvis SDK with the Spanish Jarvis persona and history."""
 
-    MAX_HISTORY = 24
+    MAX_HISTORY = 12  # recent turns sent to the model (long-term facts: Memoria)
     KEEP_ON_DISK = 60
 
     def __init__(self, cfg: HudConfig, memory_path: Optional[str] = None) -> None:

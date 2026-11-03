@@ -162,7 +162,7 @@ def test_fire_and_forget_tool_ends_the_turn(tmp_path) -> None:
     )
     agent, opened, saved = _agent(tmp_path, [turn])
     said = [str(s) for s in agent.stream("abre Stripe")]
-    assert said == ["Ahora mismo se lo abro, señor."]
+    assert said == ["Ahora mismo se lo abro,", "señor."]
     assert opened == ["https://dashboard.stripe.com"]
     assert len(agent.client.requests) == 1  # no second round trip
     req = agent.client.requests[0]
@@ -260,3 +260,47 @@ def test_events_hub_routes_audio_only_to_remote_clients() -> None:
     assert remote.get_nowait()["type"] == "audio"
     assert local.get_nowait()["type"] == "state"
     assert hub.local_clients == 1 and hub.remote_clients == 1
+
+
+def test_you_can_finish_your_sentence() -> None:
+    """Speech that arrives while Jarvis is still thinking joins the question."""
+    import time
+
+    from openjarvis.hud.assistant import JarvisAssistant
+
+    cfg = HudConfig(
+        puerto=0, fuentes=[], incluir_tiempo=False, modelo="claude-haiku-5-5"
+    )
+    a = JarvisAssistant(cfg, mic=False)
+    heard: list = []
+    a._on_text = heard.append  # type: ignore[method-assign]  # noqa: SLF001
+    a.interrupt = lambda timeout=5.0: True  # type: ignore[method-assign]
+    try:
+        a._session.acquire()  # noqa: SLF001
+        a._state = "pensando"  # noqa: SLF001
+        a._question = "pon música de"  # noqa: SLF001
+        assert a._api_heard({"text": "los Beatles"})["unido"]  # noqa: SLF001
+        for _ in range(50):
+            if heard:
+                break
+            time.sleep(0.02)
+        assert heard == ["pon música de los Beatles"]
+        # Once Jarvis has started talking, new speech no longer interrupts.
+        a._question, a._spoke = "hola", True  # noqa: SLF001
+        assert a._api_heard({"text": "otra cosa"}) == {"ok": False, "busy": True}  # noqa: SLF001
+    finally:
+        a._session.release()  # noqa: SLF001
+        a.server._httpd.server_close()  # noqa: SLF001
+
+
+def test_prepared_phrases_lose_their_silence() -> None:
+    import numpy as np
+
+    from openjarvis.hud.voice import trim_silence
+
+    rate = 24000
+    quiet = np.zeros(rate, dtype=np.float32)
+    voice = np.full(rate // 2, 0.3, dtype=np.float32)
+    out = trim_silence([quiet, voice, quiet], rate)
+    assert len(out) < rate  # was 2.5 s, now ~0.6 s
+    assert len(out) >= rate // 2

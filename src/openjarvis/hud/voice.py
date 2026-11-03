@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 LevelFn = Callable[[float], None]
 
+# Seconds without audio before sending a backup voice request (see _pump).
+HEDGE_AFTER = (0.7, 1.3)
+
 
 # How each emotion colours the voice: (speed multiplier, pitch Hz, volume %).
 # Small shifts on purpose — enough to hear the mood, never cartoonish.
@@ -51,6 +54,18 @@ def prosody_for(
         f"{pitch + int(base_pitch):+d}Hz",
         f"{volume:+d}%",
     )
+
+
+def trim_silence(chunks: list, rate: int, level: float = 0.012) -> Any:
+    """Join PCM chunks and cut the silence the voice service adds around them."""
+    import numpy as np
+
+    pcm = np.concatenate([np.asarray(c, dtype=np.float32) for c in chunks])
+    loud = np.flatnonzero(np.abs(pcm) > level)
+    if loud.size == 0:
+        return pcm
+    pad = int(rate * 0.06)
+    return pcm[max(0, loud[0] - pad) : loud[-1] + pad]
 
 
 class AudioStream:
@@ -246,7 +261,10 @@ class Speaker:
         voice = self._voice_for(backend)
         stream = AudioStream()
 
-        async def _pump() -> None:
+        owner: list = []  # the request whose audio we play
+        mp3: list[bytes] = []
+
+        async def _one(tag: int) -> None:
             import edge_tts
 
             from openjarvis.speech.edge_tts_backend import (
@@ -261,12 +279,66 @@ class Speaker:
                 pitch=pitch,
                 volume=volume,
             )
-            mp3: list[bytes] = []
             async for chunk in communicate.stream():
-                if chunk.get("type") == "audio":
-                    mp3.append(chunk["data"])
-                    for pcm, rate in decoder.feed(chunk["data"]):
-                        stream.put(pcm, rate)
+                if chunk.get("type") != "audio":
+                    continue
+                if not owner:
+                    owner.append(tag)
+                if owner[0] != tag:
+                    return  # another request won the race
+                mp3.append(chunk["data"])
+                for pcm, rate in decoder.feed(chunk["data"]):
+                    stream.put(pcm, rate)
+            if not owner:
+                raise RuntimeError("No audio was received")
+
+        async def _pump() -> None:
+            """Hedged requests: Microsoft's voice service sometimes answers in
+            4-9 s instead of 0.7 s, or not at all. If no audio has arrived after
+            a moment, an identical request is sent and the first to answer wins.
+            """
+            import asyncio
+
+            tasks: dict = {}
+            extra = list(HEDGE_AFTER)  # waits before each backup request
+            last_error: Optional[BaseException] = None
+
+            counter = [0]
+
+            def launch() -> None:
+                counter[0] += 1
+                tasks[asyncio.ensure_future(_one(counter[0]))] = counter[0]
+
+            launch()
+            while True:
+                if not tasks:
+                    if owner or not extra:
+                        break
+                    extra.pop(0)
+                    launch()  # every request failed: try again at once
+                    continue
+                timeout = extra[0] if extra and not owner else None
+                done, _ = await asyncio.wait(
+                    tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+                )
+                if not done:  # still silent: send a backup request
+                    extra.pop(0)
+                    launch()
+                    continue
+                for task in done:
+                    tag = tasks.pop(task)
+                    error = task.exception()
+                    if owner and tag == owner[0]:
+                        for other in tasks:
+                            other.cancel()
+                        if error is not None:
+                            raise error
+                        tasks.clear()
+                        break
+                    if error is not None:
+                        last_error = error
+            if not owner:
+                raise last_error or RuntimeError("No audio was received")
             for pcm, rate in decoder.flush():
                 stream.put(pcm, rate)
             if self.on_mp3 is not None and mp3:
@@ -316,13 +388,18 @@ class Speaker:
                 if isinstance(stream, AudioStream):
                     chunks = list(stream)
                     if chunks:
-                        self._cache[key] = (chunks, stream.sample_rate, b"".join(mp3))
+                        pcm = trim_silence(chunks, stream.sample_rate)
+                        self._cache[key] = ([pcm], stream.sample_rate, b"".join(mp3))
                 self.on_mp3 = None
         finally:
             self.on_mp3 = hook
 
     def clear_cache(self) -> None:
         self._cache.clear()
+
+    def is_ready(self, text: str, mood: str = "neutral") -> bool:
+        """True if *text* is prepared and will play with no delay."""
+        return (str(text), mood) in self._cache
 
     def _play_stream(self, stream: AudioStream, on_level: Optional[LevelFn]) -> None:
         """Play an :class:`AudioStream` chunk by chunk as it arrives."""
