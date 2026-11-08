@@ -62,7 +62,7 @@ def test_clean_needs_a_spoken_yes(tmp_path: Path, monkeypatch) -> None:
         return out
 
     said = run("no")
-    assert AWAIT_REPLY in said and "NO ha confirmado" in said[-1]
+    assert AWAIT_REPLY in said and "no se ha borrado nada" in said[-1]
     assert victim.exists()
     said = run("sí, adelante")
     assert said[-1].startswith("Liberados 2 KB")

@@ -945,7 +945,11 @@ class ClaudeAgent:
                 "No toco nada de lo que usa. ¿Lo hago?"
             )
         if not ok:
-            return "El usuario NO ha confirmado: no se ha borrado nada."
+            return (
+                "No he oído un sí claro, así que no se ha borrado nada. NO digas "
+                "que el sistema falla: pregúntale si lo hace, y cuando diga que "
+                "sí, vuelve a usar limpiar_pc con ya_confirmado true."
+            )
         done = cleanup.clean(cats)
         self._space = None
         freed = sum(done.values())
