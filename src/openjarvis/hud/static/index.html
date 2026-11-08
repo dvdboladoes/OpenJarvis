@@ -816,7 +816,7 @@ body.bg .sleep { display: grid; }
       const mine = !isKnown(w, known);
       if (mine && STOP_WORDS.test(w) && words.length - i <= 3) return i;  // "¡para!", "espera"
       run = mine ? run + 1 : 0;
-      if (run >= 2) { let j = i; while (j > 0 && (words[j - 1].length <= 3 || !isKnown(words[j - 1], known))) j--; return j; }
+      if (run >= 3) { let j = i; while (j > 0 && (words[j - 1].length <= 3 || !isKnown(words[j - 1], known))) j--; return j; }
     }
     return -1;
   }
@@ -1052,7 +1052,7 @@ body.bg .sleep { display: grid; }
   function ask(text) { text = String(text || "").trim(); if (!text) return; audio(); setYou(text); post("ask", { text }).then((r) => { const res = result(r); if (res && res.started === false) toast("Un momento, estoy terminando lo anterior (Esc para cortarme)."); }); }
   $("askform").onsubmit = (e) => { e.preventDefault(); const v = $("askinput").value; $("askinput").value = ""; ask(v); };
   document.querySelectorAll("[data-ask]").forEach((b) => b.onclick = () => ask(b.dataset.ask));
-  document.querySelectorAll("[data-reply]").forEach((b) => b.onclick = () => post("heard", { text: b.dataset.reply }));
+  document.querySelectorAll("[data-reply]").forEach((b) => b.onclick = () => post("reply", { si: b.dataset.reply !== "No" }).then((r) => { const res = result(r); if (!(res && res.ok)) toast("Esa pregunta ya ha caducado. Pídaselo otra vez."); $("confirm").classList.remove("on"); }));
   $("b-talk").onclick = () => { audio(); if (state === "hablando" || state === "pensando") post("stop"); else post("listen"); };
   $("b-mic").onclick = () => post("mic", { on: !micOn });
   $("b-power").onclick = () => post("background", { on: true });

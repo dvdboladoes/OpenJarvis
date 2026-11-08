@@ -377,3 +377,58 @@ def test_misheard_own_voice_does_not_interrupt() -> None:
         assert not a._is_own_echo("sí, borra los archivos temporales")  # noqa: SLF001
     finally:
         a.server._httpd.server_close()  # noqa: SLF001
+
+
+def test_confirmation_ignores_stray_fragments_and_takes_the_button() -> None:
+    import threading
+    import time
+
+    from openjarvis.hud.assistant import JarvisAssistant
+
+    a = JarvisAssistant(
+        HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
+    )
+    try:
+        got = []
+        t = threading.Thread(target=lambda: got.append(a._wait_reply(5)))  # noqa: SLF001
+        t.start()
+        time.sleep(0.2)
+        a._awaiting = True  # noqa: SLF001
+        a._replies.put("cargas solo")  # noqa: SLF001  (echo / room noise)
+        time.sleep(0.5)
+        assert t.is_alive()  # still waiting
+        assert a._api_reply({"si": True})["ok"]  # noqa: SLF001
+        t.join(2)
+        assert got == ["Sí"]
+        assert not a._api_reply({"si": True})["ok"]  # noqa: SLF001  nothing pending
+    finally:
+        a.server._httpd.server_close()  # noqa: SLF001
+
+
+def test_cleanup_is_not_asked_twice(monkeypatch) -> None:
+    from openjarvis.hud import cleanup
+
+    monkeypatch.setattr(cleanup, "clean", lambda cats: {c: 1024 for c in cats})
+    report = {k: 1024 for k in cleanup.CATEGORIES}
+    brain = SimpleNamespace(
+        _history=[("assistant", "Puedo liberar 4 GB. ¿Lo limpio todo?")],
+        MAX_HISTORY=12,
+        _facts="",
+        _notes="",
+    )
+    asked = []
+    agent = ClaudeAgent(
+        HudConfig(),
+        brain,
+        MemoryStore(None),
+        get_reply=lambda _t: asked.append(1) or "no",
+    )
+    agent._space = report  # noqa: SLF001
+    agent._turn_text, agent._prev_reply = "sí, hazlo", brain._history[0][1]  # noqa: SLF001
+    gen = agent._clean(["temporales"])  # noqa: SLF001
+    try:
+        while True:
+            next(gen)
+    except StopIteration as stop:
+        assert stop.value.startswith("Liberados")
+    assert not asked

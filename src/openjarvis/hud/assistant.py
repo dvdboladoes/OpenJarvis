@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, Optional
 
 from openjarvis.hud import window
-from openjarvis.hud.agent import AWAIT_REPLY, ClaudeAgent
+from openjarvis.hud.agent import AWAIT_REPLY, ClaudeAgent, is_no, is_yes
 from openjarvis.hud.brain import (
     ActionRequest,
     JarvisBrain,
@@ -101,7 +101,8 @@ _TENS = {3: "treinta", 4: "cuarenta", 5: "cincuenta", 6: "sesenta",
 _HUNDREDS = {1: "ciento", 2: "doscientos", 3: "trescientos", 4: "cuatrocientos",
              5: "quinientos", 6: "seiscientos", 7: "setecientos",
              8: "ochocientos", 9: "novecientos"}  # fmt: skip
-_SPOKEN_UNITS = {"gb": "gigas", "mb": "megas", "kb": "kilobytes", "km": "kilometros",
+_SPOKEN_UNITS = {"gb": "gigas gigabytes", "mb": "megas megabytes",
+                 "kb": "kilobytes", "km": "kilometros",
                  "%": " por ciento ", "€": " euros ", "°c": " grados "}  # fmt: skip
 _STOP_WORDS = {"para", "calla", "callate", "espera", "stop", "basta", "jarvis"}
 
@@ -145,6 +146,9 @@ def _sounds_like(word: str, known: set) -> bool:
         return True
     if len(word) < 5:
         return False
+    # A piece of a longer word: «cargas» from «descargas».
+    if any(len(k) > len(word) and word in k for k in known):
+        return True
     import difflib
 
     return any(
@@ -225,6 +229,7 @@ class JarvisAssistant:
                 "listen": self._api_listen,
                 "ask": self._api_ask,
                 "stop": self._api_stop,
+                "reply": self._api_reply,
                 "refresh": self._api_refresh,
                 "voice": self._api_voice,
                 "timer": self._api_timer,
@@ -1443,6 +1448,16 @@ class JarvisAssistant:
 
         return {"started": self._run_job(_job)}
 
+    def _api_reply(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """The SÍ / NO buttons: always taken as the answer, never as echo."""
+        answer = "Sí" if payload.get("si") else "No"
+        if not self._awaiting:
+            return {"ok": False}
+        self._awaiting = False
+        self.hub.publish("message", role="user", text=answer)
+        self._replies.put(answer)
+        return {"ok": True}
+
     def _api_stop(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         heard = str(payload.get("text", "")).strip()[:500]
         if heard and self._is_echo_barge(heard):
@@ -1604,9 +1619,16 @@ class JarvisAssistant:
                 if self._cancel.is_set():
                     return None
                 try:
-                    return self._replies.get(timeout=0.2)
+                    answer = self._replies.get(timeout=0.2)
                 except queue.Empty:
                     continue
+                # A clear yes/no, the button, or a whole sentence counts. A
+                # stray fragment (his own echo, a voice in the room) does not:
+                # keep waiting instead of taking it as a «no».
+                if is_yes(answer) or is_no(answer) or len(answer.split()) >= 5:
+                    return answer
+                logger.info("Respuesta poco clara ignorada: «%s»", answer)
+                self._awaiting = True
             return None
         finally:
             self._awaiting = False
@@ -1622,7 +1644,7 @@ class JarvisAssistant:
         self._voice_log.append((now, text))
         return " ".join(_echo_words(text))
 
-    def _is_own_echo(self, text: str) -> bool:
+    def _is_own_echo(self, text: str, share: float = 0.6) -> bool:
         """The microphone caught Jarvis' own voice (even if misheard)."""
         now = time.monotonic()
         # While he talks, or just after (the recogniser lags a little). Not
@@ -1637,7 +1659,7 @@ class JarvisAssistant:
             return False
         known = set(words) | {w[:4] for w in words if len(w) > 3}
         echo = sum(_sounds_like(w, known) for w in heard)
-        return echo / len(heard) >= 0.6
+        return echo / len(heard) >= share
 
     def _is_echo_barge(self, text: str) -> bool:
         """An interruption that is really Jarvis hearing himself.
@@ -1647,7 +1669,7 @@ class JarvisAssistant:
         words = _fold_simple(text).split()
         if not words or (len(words) <= 3 and any(w in _STOP_WORDS for w in words)):
             return False
-        return self._is_own_echo(text)
+        return self._is_own_echo(text, share=0.5)
 
     def _remote_audio(self, mp3: bytes) -> None:
         """Send Jarvis' voice to remote devices (the Chromebook) too."""

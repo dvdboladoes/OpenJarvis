@@ -148,6 +148,14 @@ def _fold(text: str) -> str:
     return "".join(c for c in t if not unicodedata.combining(c))
 
 
+def is_no(text: str) -> bool:
+    t = re.sub(r"[^a-z ]", " ", _fold(text)).split()
+    joined = " ".join(t)
+    return bool(t) and (
+        t[0] == "no" or any(f" {w} " in f" {joined} " for w in NO_WORDS)
+    )
+
+
 def is_yes(text: str) -> bool:
     t = re.sub(r"[^a-z ]", " ", _fold(text)).split()
     joined = " ".join(t)
@@ -571,6 +579,11 @@ class ClaudeAgent:
 
     def stream(self, user_text: str, *, remember: bool = True) -> Iterator[Any]:
         """Yield :class:`Spoken` sentences (and ``AWAIT_REPLY``) for one turn."""
+        self._turn_text = user_text
+        self._prev_reply = next(
+            (c for r, c in reversed(self.brain._history) if r != "user"),
+            "",  # noqa: SLF001
+        )
         history = [
             {"role": "user" if r == "user" else "assistant", "content": c}
             for r, c in clean_history(self.brain._history)[-self.brain.MAX_HISTORY :]  # noqa: SLF001
@@ -910,10 +923,16 @@ class ClaudeAgent:
         report = getattr(self, "_space", None) or cleanup.analyze()
         total = sum(int(report.get(c, 0)) for c in cats)
         what = ", ".join(cleanup.CATEGORIES[c] for c in cats)
-        ok = yield from self._ask(
-            f"Voy a liberar unos {cleanup.human(total)} borrando {what}. "
-            "No toco nada de lo que usa. ¿Lo hago?"
-        )
+        # He already said yes to the cleanup Jarvis proposed: don't ask twice.
+        prev = _fold(getattr(self, "_prev_reply", ""))
+        asked = "?" in prev and any(w in prev for w in ("liber", "limpi", "borr"))
+        if asked and is_yes(getattr(self, "_turn_text", "")):
+            ok = True
+        else:
+            ok = yield from self._ask(
+                f"Voy a liberar unos {cleanup.human(total)} borrando {what}. "
+                "No toco nada de lo que usa. ¿Lo hago?"
+            )
         if not ok:
             return "El usuario NO ha confirmado: no se ha borrado nada."
         done = cleanup.clean(cats)
