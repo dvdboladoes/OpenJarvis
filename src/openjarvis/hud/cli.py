@@ -104,6 +104,11 @@ def hud(
     install: bool = False,
 ) -> None:
     _redirect_headless_output()
+    # Before any window exists (tray icon, dialogs): screenshots and the mouse
+    # must use the same pixels, or clicks miss on scaled (125 %) screens.
+    from openjarvis.hud.computer import _set_dpi_aware
+
+    _set_dpi_aware()
 
     from openjarvis.hud.launcher import load_user_keys
 

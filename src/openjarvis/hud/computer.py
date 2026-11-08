@@ -158,6 +158,7 @@ class Computer:
         img = ImageGrab.grab(all_screens=False)
         if region is None:
             self.scale = scale_factor(*img.size)
+            self.screen_size = img.size  # physical pixels of the capture
         else:
             x0, y0, x1, y1 = (int(v / self.scale) for v in region)
             img = img.crop((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)))
@@ -172,8 +173,18 @@ class Computer:
         return base64.b64encode(buf.getvalue()).decode("ascii")
 
     def _xy(self, coord: Any) -> Tuple[int, int]:
-        x, y = coord
-        return round(float(x) / self.scale), round(float(y) / self.scale)
+        """Screenshot pixels → mouse pixels.
+
+        With display scaling (125 % on many laptops) the capture can be in
+        physical pixels while the mouse works in scaled ones; mapping through
+        both sizes keeps clicks on target either way.
+        """
+        import pyautogui
+
+        x, y = float(coord[0]) / self.scale, float(coord[1]) / self.scale
+        mouse_w, mouse_h = pyautogui.size()
+        cap_w, cap_h = getattr(self, "screen_size", (mouse_w, mouse_h))
+        return round(x * mouse_w / cap_w), round(y * mouse_h / cap_h)
 
     # -- actions ---------------------------------------------------------
 

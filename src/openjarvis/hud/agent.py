@@ -62,6 +62,15 @@ dicen ("unos treinta y cuatro mil millones de euros"). Si además te pide \
 abrir la web, ábrela con abrir_web; si solo pregunta, no abras nada.
 - Webs: usa la URL oficial que conozcas (Stripe → https://dashboard.stripe.com). \
 Si no la conoces, usa buscar_google.
+- TU EQUIPO: FORJA programa (tipo 'programar'), ORÁCULO investiga \
+('investigar'), PLUMA redacta ('redactar') y PILOTO maneja el ordenador con \
+ratón y teclado ('ordenador'). Si nombra a uno («modo piloto», «modo \
+operador», «que lo haga Forja»), encárgale la tarea con encargar_tarea.
+- Espacio en disco («limpia el PC», «libera espacio», «borra lo que no uso»): \
+NO lo encargues al equipo. Usa analizar_espacio, dile lo que encontraste y \
+cuánto liberarías, y con su visto bueno usa limpiar_pc. Rendimiento («va \
+lento», «optimiza»): usa estado_pc y propón cerrar programas con \
+cerrar_programa.
 - Trabajos elaborados (programar, crear o arreglar código, investigar a \
 fondo, redactar algo largo, hacer varias cosas en el ordenador): no los hagas \
 tú en la conversación. Usa encargar_tarea con todos los detalles y dile en \
@@ -83,6 +92,10 @@ personalizar: "pon mi canción favorita" → la buscas en RECUERDOS.
 - Correo: redactar_correo prepara el borrador y te pide confirmación antes de \
 enviarlo. Escribe el correo completo y bien redactado.
 - Nunca digas que no puedes controlar el ordenador: sí puedes.
+- Sobre el trabajo del equipo, fíate SOLO de «TAREAS DEL EQUIPO AHORA»: no \
+digas que algo está en marcha si no aparece ahí en curso. Si una tarea ha \
+fallado, díselo con sinceridad y propón otra forma (o vuelve a encargarla \
+cambiando el enfoque) sin que tenga que repetírtelo.
 - [Ahora] y [Acciones hechas] son notas internas: no menciones la hora \
 salvo que te la pregunten; usa [Ahora] para calcular fechas de recordatorios y \
 las acciones para saber qué hiciste.
@@ -247,6 +260,44 @@ TOOLS: List[dict] = [
         "Pone un temporizador o recordatorio que suena al acabar.",
         {"segundos": {"type": "integer"}, "etiqueta": _S},
         ["segundos", "etiqueta"],
+    ),
+    _tool(
+        "analizar_espacio",
+        "Mide cuánto espacio se puede liberar en el PC (temporales, papelera, "
+        "caché de navegadores, instaladores viejos de Descargas) y qué ocupa más. "
+        "No borra nada.",
+        {},
+    ),
+    _tool(
+        "limpiar_pc",
+        "Libera espacio borrando SOLO las categorías indicadas (pide confirmación "
+        "hablada antes). Los instaladores viejos van a la papelera.",
+        {
+            "categorias": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "temporales",
+                        "papelera",
+                        "cache_navegadores",
+                        "instaladores_viejos",
+                    ],
+                },
+            }
+        },
+        ["categorias"],
+    ),
+    _tool(
+        "estado_pc",
+        "Dice qué programas usan más memoria y procesador, y cuánta queda libre.",
+        {},
+    ),
+    _tool(
+        "cerrar_programa",
+        "Cierra un programa abierto por su nombre (pide confirmación).",
+        {"nombre": _S},
+        ["nombre"],
     ),
     _tool(
         "recordatorio",
@@ -419,6 +470,7 @@ class ClaudeAgent:
         reminders: Any = None,
         type_text: Callable[[str], str] = lambda _t: "No disponible",
         dictation: Callable[[bool], None] = lambda _on: None,
+        team_status: Callable[[], str] = lambda: "",
         hide_hud: Callable[[], None] = lambda: None,
         show_hud: Callable[[], None] = lambda: None,
         notify: Callable[..., None] = lambda *_a, **_k: None,
@@ -436,6 +488,7 @@ class ClaudeAgent:
         self.reminders = reminders
         self.type_text = type_text
         self.dictation = dictation
+        self.team_status = team_status
         self.hide_hud = hide_hud
         self.show_hud = show_hud
         self.notify = notify
@@ -486,6 +539,8 @@ class ClaudeAgent:
         return (
             f"{base}\nHoy es {fecha_hablada()}.\n\nRECUERDOS SOBRE "
             f"{self.cfg.honorific.upper()}:\n{recuerdos}\n\nDATOS DEL DÍA:\n{datos}"
+            # Last, because it changes often (everything before stays cached).
+            f"\n\nTAREAS DEL EQUIPO AHORA:\n{self.team_status() or 'Ninguna tarea.'}"
         )
 
     def _request(self, messages: List[dict], max_tokens: int) -> dict:
@@ -700,6 +755,27 @@ class ClaudeAgent:
             self.power(mode)
             return "Hecho: en cuanto termines de hablar."
 
+        if name == "analizar_espacio":
+            from openjarvis.hud import cleanup
+
+            self._space = cleanup.analyze()
+            return cleanup.describe(self._space)
+        if name == "limpiar_pc":
+            return (yield from self._clean(a.get("categorias") or []))
+        if name == "estado_pc":
+            from openjarvis.hud import cleanup
+
+            return cleanup.pc_status()
+        if name == "cerrar_programa":
+            from openjarvis.hud import cleanup
+
+            prog = str(a["nombre"]).strip()
+            if not cleanup.matching_processes(prog):
+                return f"No hay ningún programa abierto llamado «{prog}»."
+            ok = yield from self._ask(
+                f"¿Cierro {prog}? Si tiene algo sin guardar, se perderá."
+            )
+            return cleanup.close_program(prog) if ok else "No lo he cerrado."
         if name == "recordatorio":
             from openjarvis.hud.routines import spoken_when
 
@@ -824,6 +900,32 @@ class ClaudeAgent:
         yield AWAIT_REPLY
         answer = self.get_reply(25.0)
         return bool(answer) and is_yes(answer)
+
+    def _clean(self, categories: List[str]) -> Iterator[Any]:
+        from openjarvis.hud import cleanup
+
+        cats = [c for c in categories if c in cleanup.CATEGORIES]
+        if not cats:
+            return "No has indicado qué limpiar."
+        report = getattr(self, "_space", None) or cleanup.analyze()
+        total = sum(int(report.get(c, 0)) for c in cats)
+        what = ", ".join(cleanup.CATEGORIES[c] for c in cats)
+        ok = yield from self._ask(
+            f"Voy a liberar unos {cleanup.human(total)} borrando {what}. "
+            "No toco nada de lo que usa. ¿Lo hago?"
+        )
+        if not ok:
+            return "El usuario NO ha confirmado: no se ha borrado nada."
+        done = cleanup.clean(cats)
+        self._space = None
+        freed = sum(done.values())
+        detail = ", ".join(
+            f"{cleanup.CATEGORIES[k]} {cleanup.human(v)}" for k, v in done.items()
+        )
+        return (
+            f"Liberados {cleanup.human(freed)} ({detail}). "
+            "Los archivos que estaban en uso se han dejado."
+        )
 
     def _email(self, a: Dict[str, Any]) -> Iterator[Any]:
         from openjarvis.hud import winctl

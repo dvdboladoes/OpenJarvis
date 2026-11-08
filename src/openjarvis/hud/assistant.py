@@ -150,6 +150,7 @@ class JarvisAssistant:
             reminders=self.reminders,
             type_text=lambda text: self.foreground.type_text(text),
             dictation=self._set_dictation,
+            team_status=self._team_status,
             hide_hud=self._hide_for_screen,
             show_hud=self._show_after_screen,
             notify=self.hub.publish,
@@ -695,6 +696,29 @@ class JarvisAssistant:
                 self._say_stream(iter(pieces), fallback=lambda: text)
         finally:
             self._end()
+
+    def _team_status(self) -> str:
+        """The real state of the team's jobs, for the brain's prompt."""
+        names = {
+            "programar": "FORJA",
+            "investigar": "ORÁCULO",
+            "redactar": "PLUMA",
+            "ordenador": "PILOTO",
+        }
+        lines = []
+        for job in self.jobs.list()[:6]:
+            state = {
+                "en_curso": "EN CURSO",
+                "hecha": "terminada",
+                "fallo": "FALLÓ",
+            }.get(job["estado"], job["estado"])
+            line = (
+                f"- {names.get(job['tipo'], job['tipo'])} · «{job['titulo']}» · {state}"
+            )
+            if job["resultado"]:
+                line += f": {job['resultado'][:160]}"
+            lines.append(line)
+        return "\n".join(lines)
 
     def _api_jobs(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"items": self.jobs.list()}
