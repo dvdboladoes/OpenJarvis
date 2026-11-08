@@ -68,7 +68,8 @@ ratón y teclado ('ordenador'). Si nombra a uno («modo piloto», «modo \
 operador», «que lo haga Forja»), encárgale la tarea con encargar_tarea.
 - Espacio en disco («limpia el PC», «libera espacio», «borra lo que no uso»): \
 NO lo encargues al equipo. Usa analizar_espacio, dile lo que encontraste y \
-cuánto liberarías, y con su visto bueno usa limpiar_pc. Rendimiento («va \
+cuánto liberarías, y cuando diga que sí usa limpiar_pc con ya_confirmado \
+true (no le vuelvas a preguntar). Rendimiento («va \
 lento», «optimiza»): usa estado_pc y propón cerrar programas con \
 cerrar_programa.
 - Trabajos elaborados (programar, crear o arreglar código, investigar a \
@@ -292,7 +293,13 @@ TOOLS: List[dict] = [
                         "instaladores_viejos",
                     ],
                 },
-            }
+            },
+            "ya_confirmado": {
+                "type": "boolean",
+                "description": "true si en su ÚLTIMO mensaje el usuario ya ha "
+                "aceptado esta limpieza que le propusiste; así no se le "
+                "vuelve a preguntar.",
+            },
         },
         ["categorias"],
     ),
@@ -774,7 +781,11 @@ class ClaudeAgent:
             self._space = cleanup.analyze()
             return cleanup.describe(self._space)
         if name == "limpiar_pc":
-            return (yield from self._clean(a.get("categorias") or []))
+            return (
+                yield from self._clean(
+                    a.get("categorias") or [], bool(a.get("ya_confirmado"))
+                )
+            )
         if name == "estado_pc":
             from openjarvis.hud import cleanup
 
@@ -914,7 +925,7 @@ class ClaudeAgent:
         answer = self.get_reply(25.0)
         return bool(answer) and is_yes(answer)
 
-    def _clean(self, categories: List[str]) -> Iterator[Any]:
+    def _clean(self, categories: List[str], confirmed: bool = False) -> Iterator[Any]:
         from openjarvis.hud import cleanup
 
         cats = [c for c in categories if c in cleanup.CATEGORIES]
@@ -926,7 +937,7 @@ class ClaudeAgent:
         # He already said yes to the cleanup Jarvis proposed: don't ask twice.
         prev = _fold(getattr(self, "_prev_reply", ""))
         asked = "?" in prev and any(w in prev for w in ("liber", "limpi", "borr"))
-        if asked and is_yes(getattr(self, "_turn_text", "")):
+        if confirmed or (asked and is_yes(getattr(self, "_turn_text", ""))):
             ok = True
         else:
             ok = yield from self._ask(
