@@ -59,6 +59,20 @@ avisa en voz alta al terminar. El progreso, el resultado y los archivos están
 en el apartado **Tareas**. Los trabajos nuevos se guardan en Documentos →
 Jarvis. Por seguridad no borra archivos ni toca el sistema.
 
+## Rutinas, recordatorios, dictado y atajo
+
+- **Rutinas:** «cuando diga *modo trabajo*, abre Visual Studio Code y Gmail,
+  baja el volumen al 30 y pon música lofi». Después basta con decir «modo
+  trabajo». También se crean y lanzan en el apartado **Rutinas y avisos**.
+- **Recordatorios:** «recuérdame mañana a las 9 llamar a Ana». Te avisa
+  hablando a esa hora, aunque esté en segundo plano.
+- **Dictado:** haz clic donde quieras escribir (WhatsApp Web, un documento…),
+  di «Jarvis, dicta» y todo lo que digas se escribe ahí. Di «coma», «punto y
+  aparte» o «nueva línea» para puntuar, y «fin del dictado» para terminar.
+  Para algo corto: «escribe *llego en diez minutos*».
+- **Atajo:** **Ctrl + Espacio** desde cualquier programa trae a Jarvis y le
+  hace escucharte (se cambia en Ajustes → Ventana).
+
 ## Gestos con la cámara
 
 Pulsa **Gestos** en Inicio (activa la cámara) y mantén el gesto medio segundo:

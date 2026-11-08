@@ -130,6 +130,7 @@ puerto = 8765
 abrir_ventana = true
 pantalla_completa = false
 navegador = "auto"       # Ventana de Jarvis: "chrome", "edge" o "auto" (Edge)
+atajo = "ctrl+espacio"   # Atajo global para llamar a Jarvis (o "desactivado")
 
 [remoto]
 # Usar Jarvis desde otro dispositivo de tu red (por ejemplo el Chromebook):
@@ -242,6 +243,7 @@ class HudConfig:
     abrir_ventana: bool = True
     pantalla_completa: bool = False
     navegador: str = "auto"
+    atajo: str = "ctrl+espacio"
 
     acceso_remoto: bool = False
     pin: str = ""
@@ -365,6 +367,7 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.navegador = str(ui.get("navegador", d.navegador) or "auto").lower()
     if d.navegador not in ("auto", "chrome", "edge"):
         d.navegador = "auto"
+    d.atajo = str(ui.get("atajo", d.atajo) or "desactivado").lower()
     d.acceso_remoto = bool(remoto.get("acceso", d.acceso_remoto))
     d.pin = str(remoto.get("pin", d.pin) or "")
     return d
@@ -530,6 +533,21 @@ SETTINGS: List[Dict[str, Any]] = [
             ["auto", "Automático (Edge)"],
             ["chrome", "Google Chrome"],
             ["edge", "Microsoft Edge"],
+        ],
+        "reinicio": True,
+    },
+    {
+        "grupo": "Ventana",
+        "seccion": "interfaz",
+        "clave": "atajo",
+        "attr": "atajo",
+        "tipo": "opcion",
+        "etiqueta": "Atajo de teclado para llamar a Jarvis desde cualquier programa",
+        "opciones": [
+            ["ctrl+espacio", "Ctrl + Espacio"],
+            ["ctrl+alt+j", "Ctrl + Alt + J"],
+            ["ctrl+shift+espacio", "Ctrl + Mayús + Espacio"],
+            ["desactivado", "Desactivado"],
         ],
         "reinicio": True,
     },

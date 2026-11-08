@@ -83,8 +83,12 @@ personalizar: "pon mi canción favorita" → la buscas en RECUERDOS.
 - Correo: redactar_correo prepara el borrador y te pide confirmación antes de \
 enviarlo. Escribe el correo completo y bien redactado.
 - Nunca digas que no puedes controlar el ordenador: sí puedes.
-- [Hora actual] y [Acciones hechas] son notas internas: no menciones la hora \
-salvo que te la pregunten, y usa las acciones para saber qué hiciste.
+- [Ahora] y [Acciones hechas] son notas internas: no menciones la hora \
+salvo que te la pregunten; usa [Ahora] para calcular fechas de recordatorios y \
+las acciones para saber qué hiciste.
+- Rutinas: si pide crear una («cuando diga modo trabajo, abre…»), usa \
+crear_rutina. Para «escribe esto en…» usa escribir_texto; para dictar un \
+texto largo, dictado.
 - Si no existe ninguna herramienta para lo que pide, dilo en vez de inventar.
 """
 
@@ -245,6 +249,60 @@ TOOLS: List[dict] = [
         ["segundos", "etiqueta"],
     ),
     _tool(
+        "recordatorio",
+        "Programa un aviso hablado para una fecha y hora exactas (aunque Jarvis "
+        "esté en segundo plano). 'cuando' en formato AAAA-MM-DDTHH:MM, calculado "
+        "a partir de [Ahora].",
+        {"cuando": _S, "texto": _S},
+        ["cuando", "texto"],
+    ),
+    _tool(
+        "borrar_recordatorio",
+        "Cancela recordatorios que contengan este texto.",
+        {"texto": _S},
+        ["texto"],
+    ),
+    _tool(
+        "crear_rutina",
+        "Crea o reemplaza una rutina: una lista de pasos que Jarvis hace de golpe "
+        "cuando el usuario dice su nombre («modo trabajo»). Acciones posibles: "
+        "abrir_web (URL), abrir_app (nombre), poner_youtube (búsqueda), "
+        "buscar_google, volumen (0-100), brillo (0-100), modo_oscuro (si/no), "
+        "multimedia (play_pause/next/prev), decir (frase).",
+        {
+            "nombre": _S,
+            "frase": _S,
+            "pasos": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"accion": _S, "valor": _S},
+                    "required": ["accion", "valor"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        ["nombre", "pasos"],
+    ),
+    _tool(
+        "ejecutar_rutina", "Ejecuta una rutina guardada.", {"nombre": _S}, ["nombre"]
+    ),
+    _tool("borrar_rutina", "Borra una rutina guardada.", {"nombre": _S}, ["nombre"]),
+    _tool(
+        "escribir_texto",
+        "Escribe un texto en la aplicación donde el usuario estaba escribiendo "
+        "(WhatsApp Web, un documento, un correo…), como si lo tecleara.",
+        {"texto": _S},
+        ["texto"],
+    ),
+    _tool(
+        "dictado",
+        "Activa el modo dictado: todo lo que diga el usuario se escribe en la "
+        "aplicación donde estaba, hasta que diga «fin del dictado».",
+        {"activar": {"type": "boolean"}},
+        ["activar"],
+    ),
+    _tool(
         "recordar",
         "Guarda para siempre un dato sobre el usuario (gustos, datos, personas, "
         "preferencias). Una frase completa en tercera persona.",
@@ -328,6 +386,13 @@ FIRE_AND_FORGET = {
     "temporizador",
     "encargar_tarea",
     "usar_pantalla",
+    "recordatorio",
+    "borrar_recordatorio",
+    "crear_rutina",
+    "ejecutar_rutina",
+    "borrar_rutina",
+    "escribir_texto",
+    "dictado",
     "recordar",
     "olvidar",
 }
@@ -350,6 +415,10 @@ class ClaudeAgent:
         add_timer: Callable[[int, str], None] = lambda _s, _l: None,
         power: Callable[[str], None] = lambda _mode: None,
         start_job: Callable[..., Any] = lambda **_k: None,
+        routines: Any = None,
+        reminders: Any = None,
+        type_text: Callable[[str], str] = lambda _t: "No disponible",
+        dictation: Callable[[bool], None] = lambda _on: None,
         hide_hud: Callable[[], None] = lambda: None,
         show_hud: Callable[[], None] = lambda: None,
         notify: Callable[..., None] = lambda *_a, **_k: None,
@@ -363,6 +432,10 @@ class ClaudeAgent:
         self.add_timer = add_timer
         self.power = power
         self.start_job = start_job
+        self.routines = routines
+        self.reminders = reminders
+        self.type_text = type_text
+        self.dictation = dictation
         self.hide_hud = hide_hud
         self.show_hud = show_hud
         self.notify = notify
@@ -404,6 +477,8 @@ class ClaudeAgent:
         base = PERSONA.format(quien=quien, tratamiento=self.cfg.honorific)
         base += AGENT_RULES.format(tratamiento=self.cfg.honorific)
         recuerdos = self.memory.as_prompt() or "(Todavía nada.)"
+        if self.routines is not None and self.routines.as_prompt():
+            recuerdos += f"\nRutinas guardadas: {self.routines.as_prompt()}"
         datos = getattr(self.brain, "_facts", "") or "(Sin datos todavía.)"
         notas = getattr(self.brain, "_notes", "")
         if notas:
@@ -462,7 +537,7 @@ class ClaudeAgent:
         messages = history + [
             {
                 "role": "user",
-                "content": f"[Hora actual: {time.strftime('%H:%M')}] {user_text}",
+                "content": f"[Ahora: {time.strftime('%Y-%m-%d %H:%M')}] {user_text}",
             }
         ]
         spoken: List[str] = []
@@ -625,6 +700,37 @@ class ClaudeAgent:
             self.power(mode)
             return "Hecho: en cuanto termines de hablar."
 
+        if name == "recordatorio":
+            from openjarvis.hud.routines import spoken_when
+
+            item = self.reminders.add(str(a["cuando"]), str(a["texto"]))
+            self.notify("reminders", items=self.reminders.list())
+            return f"Recordatorio puesto para {spoken_when(item['cuando'])}."
+        if name == "borrar_recordatorio":
+            needle = str(a["texto"]).lower()
+            gone = [r for r in self.reminders.list() if needle in r["texto"].lower()]
+            for r in gone:
+                self.reminders.delete(r["id"])
+            self.notify("reminders", items=self.reminders.list())
+            return f"Cancelados {len(gone)} recordatorios."
+        if name == "crear_rutina":
+            item = self.routines.save(a["nombre"], a.get("pasos"), a.get("frase", ""))
+            self.notify("routines", items=self.routines.list())
+            return f"Rutina «{item['nombre']}» guardada con {len(item['pasos'])} pasos."
+        if name == "borrar_rutina":
+            ok = self.routines.delete(str(a["nombre"]))
+            self.notify("routines", items=self.routines.list())
+            return "Rutina borrada." if ok else "No existe esa rutina."
+        if name == "ejecutar_rutina":
+            routine = self.routines.find(str(a["nombre"]))
+            if routine is None:
+                return "No existe esa rutina."
+            return (yield from self.run_routine(routine))
+        if name == "escribir_texto":
+            return self.type_text(str(a["texto"]))
+        if name == "dictado":
+            self.dictation(bool(a["activar"]))
+            return "Dictado activado." if a["activar"] else "Dictado terminado."
         if name == "temporizador":
             self.add_timer(
                 max(1, int(a["segundos"])), str(a.get("etiqueta") or "aviso")
@@ -661,6 +767,30 @@ class ClaudeAgent:
         if name == "ejecutar_comando":
             return (yield from self._command(a))
         raise ValueError(f"Herramienta desconocida: {name}")
+
+    def run_routine(self, routine: Dict[str, Any]) -> Iterator[Any]:
+        """Do every step of a routine; "decir" steps are spoken."""
+        from openjarvis.hud.routines import STEP_ACTIONS
+
+        self.notify("routine", nombre=routine["nombre"])
+        done = 0
+        for step in routine.get("pasos", []):
+            action, value = step["accion"], step["valor"]
+            if action == "decir":
+                yield Spoken(value, "alegre")
+                continue
+            arg: Any = value
+            if action in ("volumen", "brillo"):
+                arg = int("".join(c for c in value if c.isdigit()) or 50)
+            elif action == "modo_oscuro":
+                arg = value.lower() not in ("no", "false", "0", "claro")
+            try:
+                self.notify("tool", nombre=action, datos={STEP_ACTIONS[action]: arg})
+                yield from self._run_tool(action, {STEP_ACTIONS[action]: arg})
+                done += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Paso de rutina %s falló: %s", action, exc)
+        return f"Rutina «{routine['nombre']}»: {done} pasos hechos."
 
     @staticmethod
     def _image_result(b64: str) -> List[dict]:

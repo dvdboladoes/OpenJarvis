@@ -18,6 +18,17 @@ def _redirect_headless_output() -> None:
     stream = open(log_path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
     sys.stdout = sys.stdout or stream
     sys.stderr = sys.stderr or stream
+    # Keep a record of timings and warnings ("Tiempos: total …") to diagnose
+    # slow answers; the HTTP libraries only log problems.
+    import logging
+
+    logging.basicConfig(
+        stream=stream,
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    for noisy in ("httpx", "httpx2", "httpcore", "anthropic", "urllib3"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 @click.command(
@@ -147,7 +158,9 @@ def hud(
     if port:
         cfg.puerto = port
 
-    if not demo and _already_running(cfg.puerto, background):
+    if not demo and (
+        _already_running(cfg.puerto, background) or not _single_instance()
+    ):
         console.print("Jarvis ya estaba abierto: lo traigo al frente.")
         return
 
@@ -189,6 +202,10 @@ def hud(
             fullscreen=fullscreen or cfg.pantalla_completa,
             browser=cfg.navegador,
         )
+        if not (fullscreen or cfg.pantalla_completa or background):
+            from openjarvis.hud.window import maximize_when_ready
+
+            maximize_when_ready()
 
     tray = None
     if assistant is not None:
@@ -228,6 +245,31 @@ def hud(
             assistant.stop()
         if runner is not None:
             runner.stop()
+    if assistant is not None:
+        # Leave nothing behind: the tray icon and audio libraries keep threads
+        # alive that would otherwise leave a "ghost" Jarvis listening.
+        import os
+
+        os._exit(0)
+
+
+_INSTANCE_LOCK = None
+
+
+def _single_instance() -> bool:
+    """True if this is the only Jarvis running (a Windows named mutex)."""
+    global _INSTANCE_LOCK
+    import sys
+
+    if sys.platform != "win32":
+        return True
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    _INSTANCE_LOCK = kernel32.CreateMutexW(
+        None, False, "Local\\JarvisHUDSingleInstance"
+    )
+    return kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
 
 
 def _already_running(port: int, background: bool) -> bool:

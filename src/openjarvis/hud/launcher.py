@@ -105,8 +105,9 @@ def open_window(url: str, *, fullscreen: bool = False, browser: str = "auto") ->
             "--disable-backgrounding-occluded-windows",
             "--window-size=1600,900",
         ]
-        if fullscreen:
-            args.append("--start-fullscreen")
+        # Fill the screen (a fixed 1600x900 window hid the bottom bar on
+        # laptops with display scaling).
+        args.append("--start-fullscreen" if fullscreen else "--start-maximized")
         try:
             flags = (
                 getattr(subprocess, "DETACHED_PROCESS", 0)

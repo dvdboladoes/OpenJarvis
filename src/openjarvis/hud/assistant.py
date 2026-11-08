@@ -28,10 +28,17 @@ from openjarvis.hud.config import (
     save_config_value,
 )
 from openjarvis.hud.context import Snapshot, collect_snapshot
+from openjarvis.hud.hotkey import ForegroundTracker, GlobalHotkey, dictation_text
 from openjarvis.hud.jobs import Job, JobManager
 from openjarvis.hud.memory import MemoryStore
 from openjarvis.hud.pc import Action, parse_command
 from openjarvis.hud.pc import execute as run_pc_action
+from openjarvis.hud.routines import (
+    ReminderClock,
+    ReminderStore,
+    RoutineStore,
+    spoken_when,
+)
 from openjarvis.hud.server import EventHub, HudServer
 from openjarvis.hud.skills import NotesStore, TimerManager, parse_note, parse_timer
 from openjarvis.hud.vision import (
@@ -122,6 +129,12 @@ class JarvisAssistant:
         )
         self.brain.set_notes(self.notes.texts())
         self.memory = MemoryStore(get_config_dir() / "jarvis_recuerdos.json")
+        self.routines = RoutineStore(get_config_dir() / "jarvis_rutinas.json")
+        self.reminders = ReminderStore(get_config_dir() / "jarvis_recordatorios.json")
+        self.reminder_clock = ReminderClock(self.reminders, self._reminder_due)
+        self.foreground = ForegroundTracker()
+        self.hotkey = GlobalHotkey(cfg.atajo, self._on_hotkey)
+        self._dictating = False
         self.frames = FrameBroker(self.hub.publish)
         self._news: "queue.Queue[Any]" = queue.Queue()  # finished jobs to announce
         self.agent = ClaudeAgent(
@@ -133,6 +146,10 @@ class JarvisAssistant:
             add_timer=lambda secs, label: self.timers.add(secs, label),
             power=lambda mode: setattr(self, "_after", mode),
             start_job=lambda **kw: self.jobs.start(**kw),
+            routines=self.routines,
+            reminders=self.reminders,
+            type_text=lambda text: self.foreground.type_text(text),
+            dictation=self._set_dictation,
             hide_hud=self._hide_for_screen,
             show_hud=self._show_after_screen,
             notify=self.hub.publish,
@@ -174,6 +191,14 @@ class JarvisAssistant:
                 "job_cancel": self._api_job_cancel,
                 "open_path": self._api_open_path,
                 "gesture": self._api_gesture,
+                "routines": self._api_routines,
+                "routine_save": self._api_routine_save,
+                "routine_delete": self._api_routine_delete,
+                "routine_run": self._api_routine_run,
+                "reminders": self._api_reminders,
+                "reminder_add": self._api_reminder_add,
+                "reminder_delete": self._api_reminder_delete,
+                "dictation": self._api_dictation,
             },
             port=cfg.puerto,
             remote=cfg.acceso_remoto,
@@ -224,6 +249,11 @@ class JarvisAssistant:
         self.hub.publish("notes", items=self.notes.list())
         self.hub.publish("timers", items=self.timers.list())
         self.hub.publish("memory", items=self.memory.list())
+        self.hub.publish("routines", items=self.routines.list())
+        self.hub.publish("reminders", items=self.reminders.list())
+        self.reminder_clock.start()
+        self.foreground.start()
+        self.hotkey.start()
         if self._use_mic:
             self._start_listener()
         for target, name in (
@@ -242,6 +272,9 @@ class JarvisAssistant:
             self.listener.stop()
         if self._claps is not None:
             self._claps.stop()
+        self.reminder_clock.stop()
+        self.foreground.stop()
+        self.hotkey.stop()
         self.server.stop()
         self.brain.close()
 
@@ -520,6 +553,114 @@ class JarvisAssistant:
         elif after == "quit":
             threading.Thread(target=self._quit_by_voice, daemon=True).start()
 
+    # ── routines, reminders, dictation, hotkey ────────────────────────
+
+    def _routine_speech(self, routine: Dict[str, Any]) -> Any:
+        said = False
+        gen = self.agent.run_routine(routine)
+        try:
+            while True:
+                piece = next(gen)
+                said = True
+                yield piece
+        except StopIteration:
+            pass
+        if not said:
+            yield Spoken(
+                f"Rutina «{routine['nombre']}» en marcha, {self.cfg.honorific}.",
+                "alegre",
+            )
+
+    def _reminder_due(self, item: Dict[str, Any]) -> None:
+        self.hub.publish("alarm", label=item["texto"])
+        self.hub.publish("reminders", items=self.reminders.list())
+        self._news.put(
+            f"{self.cfg.honorific.capitalize()}, recordatorio: {item['texto']}"
+        )
+        if not self._session.locked():
+            threading.Thread(target=self._announce_news, daemon=True).start()
+
+    def _set_dictation(self, on: bool) -> None:
+        self._dictating = bool(on)
+        self.hub.publish("dictation", on=self._dictating, ventana=self.foreground.title)
+
+    def _dictate(self, text: str) -> Dict[str, Any]:
+        piece = dictation_text(text)
+        if piece is None:
+            self._set_dictation(False)
+            threading.Thread(
+                target=self._run_job,
+                args=(lambda: self._say(Spoken("Dictado terminado.", "sereno")),),
+                daemon=True,
+            ).start()
+            return {"ok": True}
+        try:
+            self.foreground.type_text(piece)
+            self.hub.publish("message", role="user", text=f"✍ {text}")
+        except Exception as exc:  # noqa: BLE001
+            self.hub.publish("notice", text=str(exc))
+        return {"ok": True}
+
+    def _on_hotkey(self) -> None:
+        """Ctrl+Space anywhere: show Jarvis and listen."""
+        if self._background:
+            self.exit_background("atajo")
+            return
+        self._show_window()
+        self._api_listen({})
+        self.hub.publish("wake", source="atajo")
+
+    def _api_routines(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {"items": self.routines.list()}
+
+    def _api_routine_save(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        item = self.routines.save(
+            str(payload.get("nombre", "")),
+            payload.get("pasos"),
+            str(payload.get("frase", "")),
+        )
+        self.hub.publish("routines", items=self.routines.list())
+        return item
+
+    def _api_routine_delete(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        ok = self.routines.delete(str(payload.get("id", "")))
+        self.hub.publish("routines", items=self.routines.list())
+        return {"ok": ok}
+
+    def _api_routine_run(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        routine = self.routines.find(str(payload.get("nombre", "")))
+        if routine is None:
+            raise ValueError("No existe esa rutina.")
+        return {
+            "started": self._run_job(
+                lambda: self._say_stream(
+                    self._routine_speech(routine), fallback=lambda: "Hecho."
+                )
+            )
+        }
+
+    def _api_reminders(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        items = self.reminders.list()
+        return {
+            "items": [{**r, "cuando_texto": spoken_when(r["cuando"])} for r in items]
+        }
+
+    def _api_reminder_add(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        item = self.reminders.add(
+            str(payload.get("cuando", "")), str(payload.get("texto", ""))
+        )
+        self.hub.publish("reminders", items=self.reminders.list())
+        return item
+
+    def _api_reminder_delete(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        ok = self.reminders.delete(str(payload.get("id", "")))
+        self.hub.publish("reminders", items=self.reminders.list())
+        return {"ok": ok}
+
+    def _api_dictation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self._set_dictation(bool(payload.get("on")))
+        return {"on": self._dictating}
+
     # ── background jobs ───────────────────────────────────────────────
 
     def _job_done(self, job: Job) -> None:
@@ -673,6 +814,8 @@ class JarvisAssistant:
                 ).start()
                 return {"ok": True}
             return {"ok": False, "background": True}
+        if self._dictating and not self._session.locked():
+            return self._dictate(text)
         if self._awaiting:
             self._awaiting = False
             self.hub.publish("message", role="user", text=text)
@@ -726,6 +869,12 @@ class JarvisAssistant:
                 power = power_command(text)
                 if power:
                     self._after = power  # done once this session has ended
+                    return
+                routine = self.routines.find(text) if len(text.split()) <= 7 else None
+                if routine is not None:
+                    self._say_stream(
+                        self._routine_speech(routine), fallback=lambda: "Hecho."
+                    )
                     return
                 if is_sleep_command(text):
                     self._say(
@@ -1425,6 +1574,7 @@ class JarvisAssistant:
 
             # it was closed with the X
             open_window(self.server.url, browser=self.cfg.navegador)
+            window.maximize_when_ready()
 
     def exit_background(self, source: str = "interfaz") -> None:
         if not self._background:

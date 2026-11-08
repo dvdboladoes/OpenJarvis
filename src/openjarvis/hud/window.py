@@ -99,6 +99,29 @@ def bring_to_front() -> bool:
     return True
 
 
+def maximize_when_ready(timeout: float = 20.0) -> None:
+    """Maximize the Jarvis window as soon as it appears (in the background).
+
+    The browser restores the size it remembers and ignores
+    ``--start-maximized``; a fixed size hid the bottom bar on scaled screens.
+    """
+    import threading
+    import time
+
+    def _wait() -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            hwnd = find()
+            if hwnd:
+                time.sleep(0.4)
+                _show(hwnd, 3)  # SW_MAXIMIZE
+                return
+            time.sleep(0.25)
+
+    if sys.platform == "win32":
+        threading.Thread(target=_wait, name="jarvis-maximize", daemon=True).start()
+
+
 def _fold(text: str) -> str:
     t = unicodedata.normalize("NFKD", text.lower())
     return "".join(c for c in t if not unicodedata.combining(c))
@@ -123,5 +146,6 @@ __all__ = [
     "hide",
     "is_visible",
     "is_wake_phrase",
+    "maximize_when_ready",
     "minimize",
 ]

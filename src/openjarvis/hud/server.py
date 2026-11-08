@@ -61,7 +61,7 @@ class EventHub:
     STICKY = {
         "state", "snapshot", "status", "transcript", "voices", "notes",
         "timers", "system", "mood", "mic", "listen", "screen_watch",
-        "memory", "background",
+        "memory", "background", "routines", "reminders", "dictation",
     }  # fmt: skip
 
     def __init__(self) -> None:
