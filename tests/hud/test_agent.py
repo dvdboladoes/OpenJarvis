@@ -353,3 +353,27 @@ def test_own_echo_is_ignored() -> None:
         assert not a._is_own_echo("el choque de un cuerpo del tamaño")  # noqa: SLF001
     finally:
         a.server._httpd.server_close()  # noqa: SLF001
+
+
+def test_misheard_own_voice_does_not_interrupt() -> None:
+    import time
+
+    from openjarvis.hud.assistant import JarvisAssistant
+
+    a = JarvisAssistant(
+        HudConfig(puerto=0, fuentes=[], incluir_tiempo=False), mic=False
+    )
+    try:
+        a._log_voice("Puedo liberar unos 4,1 GB de archivos temporales, señor.")  # noqa: SLF001
+        a._said_at = time.monotonic()  # noqa: SLF001
+        # The recogniser spells numbers out and mishears a word or two.
+        assert a._is_echo_barge("liberal unos cuatro coma uno gigas de archivo")  # noqa: SLF001
+        # A real interruption is let through.
+        assert not a._is_echo_barge("para")  # noqa: SLF001
+        assert not a._is_echo_barge("pon música de los Beatles")  # noqa: SLF001
+        assert a._api_stop({"text": "cuatro coma uno gigas temporales"})["eco"]  # noqa: SLF001
+        # Once he is quiet, repeating his words is you answering, not echo.
+        a._said_at -= 10  # noqa: SLF001
+        assert not a._is_own_echo("sí, borra los archivos temporales")  # noqa: SLF001
+    finally:
+        a.server._httpd.server_close()  # noqa: SLF001

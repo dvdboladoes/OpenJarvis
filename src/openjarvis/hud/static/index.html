@@ -795,16 +795,28 @@ body.bg .sleep { display: grid; }
     const set = new Set(); fold(spokenByJarvis).split(/\s+/).forEach((w) => { if (w.length > 2) { set.add(w); set.add(w.slice(0, 4)); } });
     return set;
   }
+  // Edit distance ≤ 1–2: the recogniser often mishears Jarvis' voice a little.
+  function near(a, b) {
+    if (Math.abs(a.length - b.length) > 2) return false;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[b.length] <= (a.length >= 8 ? 2 : 1);
+  }
+  const isKnown = (w, known) => known.has(w) || known.has(w.slice(0, 4)) || (w.length >= 5 && [...known].some((k) => k.length >= 5 && near(w, k)));
   // Index where *your* words start in the transcript, or -1 if it is only echo.
   function userStart(words) {
     const known = knownWords(); let run = 0;
     for (let i = 0; i < words.length; i++) {
       // Short words ("de", "los", "pon") are too easy to mishear: neutral.
       const w = words[i]; if (w.length <= 3 && !STOP_WORDS.test(w)) continue;
-      const mine = !known.has(w) && !known.has(w.slice(0, 4));
+      const mine = !isKnown(w, known);
       if (mine && STOP_WORDS.test(w) && words.length - i <= 3) return i;  // "¡para!", "espera"
       run = mine ? run + 1 : 0;
-      if (run >= 2) { let j = i; while (j > 0 && (words[j - 1].length <= 3 || !known.has(words[j - 1]))) j--; return j; }
+      if (run >= 2) { let j = i; while (j > 0 && (words[j - 1].length <= 3 || !isKnown(words[j - 1], known))) j--; return j; }
     }
     return -1;
   }
@@ -833,7 +845,12 @@ body.bg .sleep { display: grid; }
       if (barge) {
         const words = fold(t).split(/\s+/).filter(Boolean), from = userStart(words);
         if (from < 0) return;  // only Jarvis' own voice
-        barge = false; bargeFrom = from; post("stop"); sfx.listen();
+        barge = false; bargeFrom = from; sfx.listen();
+        // The server double-checks: if it was only his echo, keep him talking.
+        post("stop", { text: words.slice(from).join(" ") }).then((r) => {
+          const res = result(r);
+          if (res && res.eco) { clearTimeout(timer); bargeFrom = -1; barge = true; setYou(""); try { rec.abort(); } catch (_) {} }
+        });
       }
       if (bargeFrom >= 0) { t = t.split(/\s+/).slice(bargeFrom).join(" "); if (!t) return; }
       lastHeard = performance.now(); mic = Math.max(mic, .6);
@@ -1163,7 +1180,7 @@ body.bg .sleep { display: grid; }
       case "level": if (ev.source === "voz") voice = Math.max(voice, ev.value); else mic = Math.max(mic, ev.value); break;
       case "mood": mood = ev.mood || "neutral"; paint(); break;
       case "partial": if (ev.role === "jarvis") { showJarvis(ev.text); spokenByJarvis += " " + ev.text; } else setYou(ev.text); break;
-      case "ahead": spokenByJarvis += " " + ev.text; break;
+      case "ahead": spokenByJarvis += " " + ev.text + " " + (ev.palabras || ""); break;
       case "message": if (ev.role === "jarvis") { showJarvis(ev.text); spokenByJarvis += " " + ev.text; } else { setYou(ev.text); jarvisText = ""; $("jarvis").innerHTML = ""; spokenByJarvis = ""; } chatAppend(ev.role, ev.text); break;
       case "confirm": $("confirm-q").textContent = ev.pregunta || ""; $("confirm").classList.toggle("on", !!ev.pregunta); break;
       case "snapshot": if (ev.tiempo) { const m = ev.tiempo.match(/[+-]?\d+\s*°C/); $("w-t").textContent = m ? m[0].replace(/\s/g, "") : ""; $("w-c").textContent = " " + ev.tiempo.split(",")[0]; $("weather").classList.remove("hidden"); } break;

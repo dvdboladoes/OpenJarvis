@@ -92,6 +92,69 @@ def _fold_simple(text: str) -> str:
     return " ".join(re.sub(r"[^a-z ]", " ", t).split())
 
 
+_UNITS = (
+    "cero uno dos tres cuatro cinco seis siete ocho nueve diez once doce trece "
+    "catorce quince dieciseis diecisiete dieciocho diecinueve veinte"
+).split()
+_TENS = {3: "treinta", 4: "cuarenta", 5: "cincuenta", 6: "sesenta",
+         7: "setenta", 8: "ochenta", 9: "noventa"}  # fmt: skip
+_HUNDREDS = {1: "ciento", 2: "doscientos", 3: "trescientos", 4: "cuatrocientos",
+             5: "quinientos", 6: "seiscientos", 7: "setecientos",
+             8: "ochocientos", 9: "novecientos"}  # fmt: skip
+_SPOKEN_UNITS = {"gb": "gigas", "mb": "megas", "kb": "kilobytes", "km": "kilometros",
+                 "%": " por ciento ", "€": " euros ", "°c": " grados "}  # fmt: skip
+_STOP_WORDS = {"para", "calla", "callate", "espera", "stop", "basta", "jarvis"}
+
+
+def _num_words(n: int) -> str:
+    if n <= 20:
+        return _UNITS[n]
+    if n < 30:
+        return "veinti" + _UNITS[n - 20]
+    if n < 100:
+        tens, unit = divmod(n, 10)
+        return _TENS[tens] + (f" y {_UNITS[unit]}" if unit else "")
+    if n == 100:
+        return "cien"
+    if n < 1000:
+        hundreds, rest = divmod(n, 100)
+        return _HUNDREDS[hundreds] + (f" {_num_words(rest)}" if rest else "")
+    if n < 1_000_000:
+        thousands, rest = divmod(n, 1000)
+        head = "mil" if thousands == 1 else f"{_num_words(thousands)} mil"
+        return head + (f" {_num_words(rest)}" if rest else "")
+    return ""
+
+
+def _echo_words(text: str) -> list:
+    """Words as the speech recogniser hears them: «4,1 GB» → cuatro coma uno
+    gigas. Used to recognise Jarvis' own voice coming back through the mic."""
+    import re
+
+    t = text.lower()
+    for written, spoken in _SPOKEN_UNITS.items():
+        t = re.sub(rf"(?<=\d)\s*{re.escape(written)}", f" {spoken} ", t)
+    t = re.sub(r"(\d)[,.](\d)", r"\1 coma \2", t)
+    t = re.sub(r"\d{1,6}", lambda m: f" {_num_words(int(m.group()))} ", t)
+    return _fold_simple(t).split()
+
+
+def _sounds_like(word: str, known: set) -> bool:
+    """Same word, or close enough that the recogniser may have misheard it."""
+    if word in known or word[:4] in known:
+        return True
+    if len(word) < 5:
+        return False
+    import difflib
+
+    return any(
+        len(k) >= 4
+        and abs(len(k) - len(word)) <= 2
+        and difflib.SequenceMatcher(None, word, k).ratio() >= 0.75
+        for k in known
+    )
+
+
 _VERSION: Optional[str] = None
 
 
@@ -235,6 +298,8 @@ class JarvisAssistant:
         self._after = ""  # "background" / "quit" once the session ends
         self._said_text = ""  # what Jarvis said last, and when he finished
         self._said_at = 0.0
+        # Everything Jarvis has been about to say lately, to spot his echo.
+        self._voice_log: list = []
         self._replies: "queue.Queue[str]" = queue.Queue()
         self._background = False
         self._claps: Any = None
@@ -1194,7 +1259,9 @@ class JarvisAssistant:
                     continue
                 # Tell the page what is about to be said, so it can recognise
                 # Jarvis' own echo (and not mistake it for you).
-                self.hub.publish("ahead", text=str(item))
+                self.hub.publish(
+                    "ahead", text=str(item), palabras=self._log_voice(str(item))
+                )
                 # A stream: playback starts with the first chunk of audio.
                 audio_q.put((item, self.speaker.synthesize_streaming(item)))
 
@@ -1247,6 +1314,7 @@ class JarvisAssistant:
                     self.speaker.play(audio, self._voice_level)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("No se pudo reproducir el audio: %s", exc)
+                self._said_at = time.monotonic()  # the echo window counts from here
 
         if said:
             self._said_text, self._said_at = " ".join(said), time.monotonic()
@@ -1280,6 +1348,8 @@ class JarvisAssistant:
         self._set_mood(mood)
         self.hub.publish("message", role="jarvis", text=str(text), mood=mood)
         self._set_state("hablando", "")
+        self.hub.publish("ahead", text=str(text), palabras=self._log_voice(str(text)))
+        self._said_at = time.monotonic()
         self._mute_ears()
         self.speaker.say(text, on_level=self._voice_level, mood=mood)
         self._said_text, self._said_at = str(text), time.monotonic()
@@ -1373,7 +1443,11 @@ class JarvisAssistant:
 
         return {"started": self._run_job(_job)}
 
-    def _api_stop(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _api_stop(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        heard = str(payload.get("text", "")).strip()[:500]
+        if heard and self._is_echo_barge(heard):
+            logger.info("Interrupción ignorada: era su propio eco («%s»)", heard)
+            return {"stopped": False, "eco": True}
         threading.Thread(target=self.interrupt, daemon=True).start()
         return {"stopped": True}
 
@@ -1541,17 +1615,39 @@ class JarvisAssistant:
                 self.listener.pause()
             self._set_state("pensando", "")
 
+    def _log_voice(self, text: str) -> str:
+        """Note what Jarvis is about to say; returns it as the mic would hear it."""
+        now = time.monotonic()
+        self._voice_log = [(t, s) for t, s in self._voice_log if now - t < 30][-20:]
+        self._voice_log.append((now, text))
+        return " ".join(_echo_words(text))
+
     def _is_own_echo(self, text: str) -> bool:
-        """The microphone caught the tail of what Jarvis just said."""
-        if time.monotonic() - self._said_at > 4.0 or not self._said_text:
+        """The microphone caught Jarvis' own voice (even if misheard)."""
+        now = time.monotonic()
+        # While he talks, or just after (the recogniser lags a little). Not
+        # while he waits for your answer: then «sí, limpia la papelera» is you.
+        speaking = self._session.locked() and self._spoke and self._state == "hablando"
+        if not speaking and now - self._said_at > 2.5:
             return False
+        said = [self._said_text] + [s for t, s in self._voice_log if now - t < 30]
+        words = [w for s in said for w in _echo_words(s)]
         heard = [w for w in _fold_simple(text).split() if len(w) > 2]
-        said = _fold_simple(self._said_text).split()
-        if not heard:
+        if not heard or not words:
             return False
-        known = set(said) | {w[:4] for w in said if len(w) > 3}
-        echo = sum(w in known or w[:4] in known for w in heard)
+        known = set(words) | {w[:4] for w in words if len(w) > 3}
+        echo = sum(_sounds_like(w, known) for w in heard)
         return echo / len(heard) >= 0.6
+
+    def _is_echo_barge(self, text: str) -> bool:
+        """An interruption that is really Jarvis hearing himself.
+
+        A short «¡para!» or «espera» is always you, even if he says the word.
+        """
+        words = _fold_simple(text).split()
+        if not words or (len(words) <= 3 and any(w in _STOP_WORDS for w in words)):
+            return False
+        return self._is_own_echo(text)
 
     def _remote_audio(self, mp3: bytes) -> None:
         """Send Jarvis' voice to remote devices (the Chromebook) too."""
