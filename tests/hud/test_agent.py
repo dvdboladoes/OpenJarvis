@@ -89,8 +89,12 @@ def test_settings_validation() -> None:
     assert coerce_setting(spec["pensar"], 1) is True
     with pytest.raises(ValueError):
         coerce_setting(spec["modelo"], "gpt-5")
-    for s in SETTINGS:  # every setting maps to a real config attribute
-        assert hasattr(HudConfig(), s["attr"]), s["attr"]
+    cfg = HudConfig()
+    for s in SETTINGS:  # every setting maps to a real config value
+        if s["attr"].startswith("gesto:"):
+            assert s["attr"].split(":", 1)[1] in cfg.gestos
+        else:
+            assert hasattr(cfg, s["attr"]), s["attr"]
 
 
 # ── the agent with a fake Claude ────────────────────────────────────────────

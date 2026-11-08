@@ -62,11 +62,16 @@ dicen ("unos treinta y cuatro mil millones de euros"). Si además te pide \
 abrir la web, ábrela con abrir_web; si solo pregunta, no abras nada.
 - Webs: usa la URL oficial que conozcas (Stripe → https://dashboard.stripe.com). \
 Si no la conoces, usa buscar_google.
+- Trabajos elaborados (programar, crear o arreglar código, investigar a \
+fondo, redactar algo largo, hacer varias cosas en el ordenador): no los hagas \
+tú en la conversación. Usa encargar_tarea con todos los detalles y dile en \
+una frase que te pones con ello y le avisas al terminar ("Me pongo con ello, \
+señor; le aviso en cuanto esté."). Así sigues libre para lo que necesite.
 - Ayuda con lo que tiene en pantalla (código en Visual Studio Code, un \
-formulario, una configuración, un inicio de sesión…): si no ha dicho qué \
-prefiere, pregúntale "¿Se lo explico o lo hago yo?". Si quiere que lo hagas \
-tú, usa usar_pantalla con instrucciones claras y completas. Si quiere \
-explicación, usa mirar_pantalla y explícaselo paso a paso.
+formulario, una configuración…): si no ha dicho qué prefiere, pregúntale \
+"¿Se lo explico o lo hago yo?". Si quiere que lo hagas tú, usa \
+encargar_tarea (tipo 'ordenador', o 'programar' si son archivos de código). \
+Si quiere explicación, usa mirar_pantalla y explícaselo paso a paso.
 - Nunca escribas contraseñas, códigos de verificación ni datos de pago: \
 pídele que los ponga él.
 - MEMORIA: cuando te cuente algo suyo que convenga recordar (gustos, \
@@ -259,11 +264,30 @@ TOOLS: List[dict] = [
     ),
     _tool("mirar_camara", "Mira por la cámara web.", {}),
     _tool(
+        "encargar_tarea",
+        "Encarga un trabajo elaborado a tu equipo experto, que lo hace en "
+        "segundo plano con un modelo más potente y avisa al terminar (tú sigues "
+        "libre para charlar). Úsalo para: programar (crear o modificar código, "
+        "scripts, webs, proyectos), investigar a fondo, redactar documentos "
+        "largos, o hacer cosas en el ordenador con ratón y teclado (tipo "
+        "'ordenador'). Escribe en 'tarea' TODO lo que pidió el usuario, con "
+        "detalles, como si se lo explicaras a otra persona. 'carpeta' solo si "
+        "dijo dónde trabajar (p. ej. 'Desktop/mi-web').",
+        {
+            "tipo": {
+                "type": "string",
+                "enum": ["programar", "investigar", "redactar", "ordenador"],
+            },
+            "titulo": _S,
+            "tarea": _S,
+            "carpeta": _S,
+        },
+        ["tipo", "titulo", "tarea"],
+    ),
+    _tool(
         "usar_pantalla",
-        "Hace una tarea en el ordenador con el ratón y el teclado, como lo "
-        "haría el usuario: escribir o cambiar código en un editor, rellenar un "
-        "formulario, tocar una configuración, navegar por una web… Describe la "
-        "tarea completa y concreta.",
+        "Hace una tarea en el ordenador con el ratón y el teclado (en segundo "
+        "plano, con el equipo experto). Describe la tarea completa.",
         {"tarea": _S},
         ["tarea"],
     ),
@@ -302,6 +326,8 @@ FIRE_AND_FORGET = {
     "bloquear_pantalla",
     "apagar_jarvis",
     "temporizador",
+    "encargar_tarea",
+    "usar_pantalla",
     "recordar",
     "olvidar",
 }
@@ -323,6 +349,7 @@ class ClaudeAgent:
         look_camera: Callable[[], Optional[str]] = lambda: None,
         add_timer: Callable[[int, str], None] = lambda _s, _l: None,
         power: Callable[[str], None] = lambda _mode: None,
+        start_job: Callable[..., Any] = lambda **_k: None,
         hide_hud: Callable[[], None] = lambda: None,
         show_hud: Callable[[], None] = lambda: None,
         notify: Callable[..., None] = lambda *_a, **_k: None,
@@ -335,6 +362,7 @@ class ClaudeAgent:
         self.look_camera = look_camera
         self.add_timer = add_timer
         self.power = power
+        self.start_job = start_job
         self.hide_hud = hide_hud
         self.show_hud = show_hud
         self.notify = notify
@@ -617,8 +645,17 @@ class ClaudeAgent:
             if not image:
                 return "No puedo ver la cámara (¿permiso o interfaz cerrada?)."
             return self._image_result(image)
-        if name == "usar_pantalla":
-            return (yield from self._use_computer(str(a["tarea"])))
+        if name in ("encargar_tarea", "usar_pantalla"):
+            tipo = str(a.get("tipo") or "ordenador")
+            job = self.start_job(
+                tipo=tipo,
+                tarea=str(a["tarea"]),
+                carpeta=str(a.get("carpeta") or ""),
+                titulo=str(a.get("titulo") or a["tarea"])[:70],
+            )
+            return (
+                f"Encargada (tarea {getattr(job, 'id', '?')}). Te avisaré al terminar."
+            )
         if name == "redactar_correo":
             return (yield from self._email(a))
         if name == "ejecutar_comando":

@@ -48,6 +48,24 @@ La primera vez, Edge puede pedir permiso para el micrófono: pulsa **Permitir**.
 te pide un «sí». Nunca escribe contraseñas, códigos ni datos de pago: te pide
 que los pongas tú.
 
+## Tareas elaboradas (equipo experto)
+
+Para lo que lleva más de unos segundos —**programar** («hazme una web para mi
+negocio en el escritorio», «arregla el error de mi script»), **investigar a
+fondo**, **redactar** un documento largo o **hacer cosas en el ordenador**—
+Jarvis responde al momento «me pongo con ello» y lo hace un modelo más potente
+(Claude Sonnet 5.5) en segundo plano. Tú puedes seguir hablando con Jarvis; te
+avisa en voz alta al terminar. El progreso, el resultado y los archivos están
+en el apartado **Tareas**. Los trabajos nuevos se guardan en Documentos →
+Jarvis. Por seguridad no borra archivos ni toca el sistema.
+
+## Gestos con la cámara
+
+Pulsa **Gestos** en Inicio (activa la cámara) y mantén el gesto medio segundo:
+✋ pausa/reanuda la música · 👍 / 👎 sube / baja el volumen (mantenlo para
+seguir) · ✊ Jarvis se calla · ✌️ Jarvis te escucha · ☝️ siguiente canción.
+Cambia lo que hace cada gesto en Ajustes → Gestos.
+
 ## Los apartados
 
 - **Inicio:** el núcleo holográfico, lo que dices tú y lo que contesta, y una

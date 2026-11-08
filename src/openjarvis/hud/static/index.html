@@ -231,6 +231,26 @@ select.field option { background: #071522; }
 .mem .t { flex: 1; outline: 0; border-radius: 8px; padding: 2px 4px; margin: -2px -4px; }
 .mem .t:focus { background: rgba(0, 0, 0, .3); box-shadow: 0 0 0 1px rgba(var(--accent-rgb), .5); }
 .mem small { color: var(--faint); font-size: 11.5px; white-space: nowrap; padding-top: 2px; }
+.nav .badge { position: absolute; top: 6px; right: 6px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px;
+  background: var(--accent); color: #02121c; font: 700 10px/16px var(--display); display: none; }
+.nav .badge.on { display: block; animation: pop .3s; }
+.job { padding: 14px 16px; }
+.card .job + .job { border-top: 1px solid var(--line); }
+.job .head { display: flex; align-items: center; gap: 10px; }
+.job .head b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag { font: 600 10.5px var(--display); letter-spacing: .14em; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line-hi); color: var(--dim); text-transform: uppercase; }
+.tag.en_curso { color: var(--accent); border-color: rgba(var(--accent-rgb), .5); }
+.tag.hecha { color: var(--ok); border-color: rgba(77, 255, 176, .45); }
+.tag.fallo, .tag.cancelada { color: var(--bad); border-color: rgba(255, 92, 122, .4); }
+.job .notes { margin: 8px 0 0; padding-left: 16px; color: var(--dim); font-size: 13px; }
+.job .notes li { margin: 2px 0; }
+.job .res { margin-top: 8px; }
+.job .files { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.job .files button { font-size: 12px; padding: 5px 9px; border-radius: 9px; border: 1px solid var(--line-hi); background: rgba(255, 255, 255, .03); color: var(--dim); }
+.job .files button:hover { color: var(--ink); }
+.job .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(var(--accent-rgb), .25); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+.cam .gesture { position: absolute; left: 8px; bottom: 8px; padding: 5px 10px; border-radius: 10px; background: rgba(0, 0, 0, .6); font: 600 13px var(--display); color: #fff; display: none; }
+.cam .gesture.on { display: block; }
 .mem .del { border: 0; background: transparent; color: var(--faint); font-size: 18px; line-height: 1; padding: 0 2px; }
 .mem .del:hover { color: var(--bad); }
 .add { display: flex; gap: 8px; margin-top: 10px; }
@@ -278,6 +298,8 @@ body.bg .sleep { display: grid; }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="8.5" stroke-dasharray="3 2.4"/></svg><span class="tip">Inicio</span></button>
     <button class="nav" data-view="chat" aria-label="Conversación">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A1.5 1.5 0 0 1 4 14.5z"/></svg><span class="tip">Conversación</span></button>
+    <button class="nav" data-view="tasks" aria-label="Tareas">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="m3.5 6 1.2 1.2L7 5M3.5 12l1.2 1.2L7 11M3.5 18l1.2 1.2L7 17"/></svg><span class="badge" id="jobs-badge"></span><span class="tip">Tareas</span></button>
     <button class="nav" data-view="memory" aria-label="Memoria">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 4.5a3 3 0 0 0-3 3 3 3 0 0 0-2 5.2A3.2 3.2 0 0 0 7.5 18 2.8 2.8 0 0 0 12 19.5V5.6A3 3 0 0 0 9 4.5zM15 4.5a3 3 0 0 1 3 3 3 3 0 0 1 2 5.2A3.2 3.2 0 0 1 16.5 18 2.8 2.8 0 0 1 12 19.5"/></svg><span class="tip">Memoria</span></button>
     <button class="nav" data-view="settings" aria-label="Ajustes">
@@ -314,7 +336,7 @@ body.bg .sleep { display: grid; }
         <p id="confirm-q"></p>
         <div class="row"><button class="btn" data-reply="No">No</button><button class="btn warn" data-reply="Sí">Sí, adelante</button></div>
       </div>
-      <div class="cam" id="cam"><video id="camvideo" autoplay playsinline muted></video><div class="flash" id="camshot"></div><button class="x" id="camclose" aria-label="Cerrar cámara">✕</button></div>
+      <div class="cam" id="cam"><video id="camvideo" autoplay playsinline muted></video><div class="flash" id="camshot"></div><div class="gesture" id="gesturetag"></div><button class="x" id="camclose" aria-label="Cerrar cámara">✕</button></div>
       <div class="stage">
         <div class="subs">
           <div class="you" id="you"></div>
@@ -327,6 +349,7 @@ body.bg .sleep { display: grid; }
           <button class="qa" data-ask="Mira mi pantalla y dime qué ves">Mira mi pantalla</button>
           <button class="qa" data-ask="Ponme mi canción favorita">Mi canción favorita</button>
           <button class="qa" id="b-cam">Cámara</button>
+          <button class="qa" id="b-gestures">Gestos</button>
           <button class="qa" id="b-screen">Ver pantalla siempre</button>
         </div>
         <form class="ask" id="askform" autocomplete="off">
@@ -342,6 +365,12 @@ body.bg .sleep { display: grid; }
     <section class="view" id="v-chat"><div class="panel">
       <header><h2>CONVERSACIÓN</h2><p>Lo que habéis hablado. Jarvis lo recuerda entre sesiones.</p></header>
       <div class="body"><div class="msgs" id="msgs"><div class="empty">Aún no habéis hablado.</div></div></div>
+    </div></section>
+
+    <!-- TAREAS -->
+    <section class="view" id="v-tasks"><div class="panel">
+      <header><h2>TAREAS</h2><p>Lo que el equipo experto de Jarvis hace en segundo plano: programar, investigar, redactar o manejar el ordenador. Pídeselo hablando («hazme una web para…», «investiga…») y sigue con lo tuyo: te avisa al terminar.</p></header>
+      <div class="body"><div class="card" id="joblist"><div class="empty">Ninguna tarea todavía.</div></div></div>
     </div></section>
 
     <!-- MEMORIA -->
@@ -571,7 +600,7 @@ body.bg .sleep { display: grid; }
     brillo: (d) => `Brillo al ${d.nivel} %`, fondo_pantalla: (d) => `Fondo de pantalla · ${d.imagen || ""}`, modo_oscuro: (d) => d.activar ? "Modo oscuro" : "Modo claro",
     abrir_ajustes: (d) => `Ajustes · ${d.apartado || ""}`, bloquear_pantalla: () => "Bloqueando el PC", temporizador: (d) => `Temporizador · ${d.etiqueta || ""}`,
     recordar: () => "Guardado en memoria", olvidar: () => "Olvidando", mirar_pantalla: () => "Mirando tu pantalla", mirar_camara: () => "Mirando por la cámara",
-    usar_pantalla: () => "Manejando el ordenador", mostrar_imagen: (d) => `Imágenes de ${d.busqueda || ""}`,
+    usar_pantalla: () => "Encargado: manejar el ordenador", encargar_tarea: (d) => `Encargado: ${d.titulo || d.tipo || ""}`, mostrar_imagen: (d) => `Imágenes de ${d.busqueda || ""}`,
     restaurar_fondo: () => "Restaurando el fondo", apagar_jarvis: (d) => d.modo === "cerrar" ? "Cerrando Jarvis" : "Segundo plano", redactar_correo: (d) => `Correo para ${d.para || ""}`, ejecutar_comando: () => "Preparando un comando",
   };
   function activity(text, ms = 3500) {
@@ -666,7 +695,74 @@ body.bg .sleep { display: grid; }
       $("camvideo").srcObject = camStream; $("cam").classList.add("on"); $("b-cam").classList.add("on"); await new Promise((r) => setTimeout(r, 450)); return true;
     } catch (e) { toast("No tengo permiso para usar la cámara."); return false; }
   }
-  function camOff() { if (camStream) camStream.getTracks().forEach((t) => t.stop()); camStream = null; $("cam").classList.remove("on"); $("b-cam").classList.remove("on"); }
+  // ── tasks (background jobs) ──────────────────────────────
+  const jobs = new Map();
+  const JOB_TYPE = { programar: "Código", investigar: "Investigación", redactar: "Redacción", ordenador: "Ordenador" };
+  const JOB_STATE = { en_curso: "En curso", hecha: "Hecha", fallo: "Fallo", cancelada: "Cancelada" };
+  function renderJobs() {
+    const items = [...jobs.values()].sort((a, b) => b.inicio - a.inicio);
+    const running = items.filter((j) => j.estado === "en_curso").length;
+    $("jobs-badge").textContent = running || ""; $("jobs-badge").classList.toggle("on", running > 0);
+    const box = $("joblist"); if (!box) return;
+    if (!items.length) { box.innerHTML = `<div class="empty">Ninguna tarea todavía.</div>`; return; }
+    box.innerHTML = items.map((j) => {
+      const mins = Math.max(1, Math.round(((j.fin || Date.now() / 1000) - j.inicio) / 60));
+      const files = (j.archivos || []).slice(-6).map((f) => `<button data-open="${esc(f)}">📄 ${esc(f.split(/[\\/]/).pop())}</button>`).join("");
+      return `<div class="job"><div class="head">${j.estado === "en_curso" ? '<span class="spin"></span>' : ""}<b>${esc(j.titulo)}</b>
+        <span class="tag">${esc(JOB_TYPE[j.tipo] || j.tipo)}</span><span class="tag ${esc(j.estado)}">${esc(JOB_STATE[j.estado] || j.estado)} · ${mins} min</span></div>
+        ${j.estado === "en_curso" && j.notas.length ? `<ul class="notes">${j.notas.slice(-3).map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+        ${j.resultado ? `<div class="res">${esc(j.resultado)}</div>` : ""}
+        <div class="files">${j.tipo !== "ordenador" ? `<button data-open="${esc(j.carpeta)}">📁 Abrir carpeta</button>` : ""}${files}
+        ${j.estado === "en_curso" ? `<button data-cancel="${esc(j.id)}">✕ Cancelar</button>` : ""}</div></div>`;
+    }).join("");
+    box.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => post("open_path", { ruta: b.dataset.open }).then((r) => { if (!result(r)) toast((r && r.error) || "No se pudo abrir."); }));
+    box.querySelectorAll("[data-cancel]").forEach((b) => b.onclick = () => post("job_cancel", { id: b.dataset.cancel }));
+  }
+  setInterval(() => { if (view === "tasks" && [...jobs.values()].some((j) => j.estado === "en_curso")) renderJobs(); }, 30000);
+
+  // ── hand gestures (camera) → actions on the PC ───────────
+  // MediaPipe's gesture model runs in this page, ~8 times per second.
+  const GESTURES = { Open_Palm: "palma", Closed_Fist: "puno", Thumb_Up: "pulgar_arriba", Thumb_Down: "pulgar_abajo", Victory: "victoria", Pointing_Up: "senalar", ILoveYou: "rock" };
+  const GESTURE_EMOJI = { palma: "✋", puno: "✊", pulgar_arriba: "👍", pulgar_abajo: "👎", victoria: "✌️", senalar: "☝️", rock: "🤟" };
+  const MP = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+  let recognizer = null, gesturesOn = false, gestureTimer = 0, held = { name: "", since: 0, fired: 0 };
+  async function loadRecognizer() {
+    if (recognizer) return recognizer;
+    const vision = await import(`${MP}/vision_bundle.mjs`);
+    const files = await vision.FilesetResolver.forVisionTasks(`${MP}/wasm`);
+    recognizer = await vision.GestureRecognizer.createFromOptions(files, {
+      baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task", delegate: "GPU" },
+      runningMode: "VIDEO", numHands: 1, minHandDetectionConfidence: 0.6, minTrackingConfidence: 0.5,
+    });
+    return recognizer;
+  }
+  function gestureTick() {
+    const v = $("camvideo"); if (!gesturesOn || !recognizer || !v.videoWidth || background) return;
+    const now = performance.now(); let name = "";
+    try {
+      const r = recognizer.recognizeForVideo(v, now), g = r.gestures && r.gestures[0] && r.gestures[0][0];
+      if (g && g.score >= 0.65) name = GESTURES[g.categoryName] || "";
+    } catch (_) { return; }
+    const tag = $("gesturetag"); tag.textContent = name ? `${GESTURE_EMOJI[name]} ${name.replace(/_/g, " ")}` : ""; tag.classList.toggle("on", !!name);
+    if (name !== held.name) { held = { name, since: now, fired: 0 }; return; }
+    // Hold the gesture ~0.5 s to trigger it; volume repeats while you keep it.
+    const repeat = name === "pulgar_arriba" || name === "pulgar_abajo";
+    if (name && now - held.since > 500 && (!held.fired || (repeat && now - held.fired > 700))) { held.fired = now; post("gesture", { nombre: name }); }
+  }
+  async function setGestures(on) {
+    gesturesOn = on; $("b-gestures").classList.toggle("on", on); clearInterval(gestureTimer);
+    try { localStorage.setItem("jarvis-gestos", on ? "1" : ""); } catch (_) {}
+    if (!on) { $("gesturetag").classList.remove("on"); return; }
+    if (!(await camOn())) { gesturesOn = false; $("b-gestures").classList.remove("on"); return; }
+    if (!recognizer) toast("Cargando el reconocimiento de gestos… (la primera vez tarda unos segundos)", 4000);
+    try { await loadRecognizer(); } catch (e) { toast("No he podido cargar los gestos (¿sin internet?)."); gesturesOn = false; $("b-gestures").classList.remove("on"); return; }
+    toast("Gestos activados: ✋ pausa · 👍👎 volumen · ✊ me callo · ✌️ te escucho · ☝️ siguiente. Cámbialos en Ajustes.", 6000);
+    gestureTimer = setInterval(gestureTick, 120);
+  }
+  $("b-gestures").onclick = () => setGestures(!gesturesOn);
+  try { if (localStorage.getItem("jarvis-gestos")) setTimeout(() => setGestures(true), 2500); } catch (_) {}
+
+  function camOff() { if (gesturesOn) setGestures(false); if (camStream) camStream.getTracks().forEach((t) => t.stop()); camStream = null; $("cam").classList.remove("on"); $("b-cam").classList.remove("on"); }
   async function camFrame(id) {
     if (!(await camOn())) return; const v = $("camvideo"), c = document.createElement("canvas"), w = Math.min(1024, v.videoWidth || 640);
     c.width = w; c.height = Math.round(w * (v.videoHeight || 480) / (v.videoWidth || 640)); c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
@@ -687,6 +783,7 @@ body.bg .sleep { display: grid; }
     view = v; document.querySelectorAll(".nav[data-view]").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
     document.querySelectorAll(".view").forEach((s) => s.classList.toggle("on", s.id === "v-" + v));
     document.body.classList.toggle("panel-open", v !== "home");
+    if (v === "tasks") post("jobs").then((r) => { ((result(r) || {}).items || []).forEach((j) => jobs.set(j.id, j)); renderJobs(); });
     if (v === "chat") loadHistory(); if (v === "settings" || v === "remote") loadConfig(); if (v === "memory") post("memory").then((r) => renderMemory((result(r) || {}).items || []));
   }
   document.querySelectorAll(".nav[data-view]").forEach((b) => b.onclick = () => { sfx.tap(); show(b.dataset.view); });
@@ -811,6 +908,8 @@ body.bg .sleep { display: grid; }
       case "tool": activity((TOOL[ev.nombre] || (() => "Trabajando…"))(ev.datos || {}), ev.nombre === "usar_pantalla" ? 6000 : 3200); break;
       case "pc": activity(ev.texto || "Hecho"); break;
       case "claps": activity("👏 Palmadas", 1800); break;
+      case "job": jobs.set(ev.id, ev); renderJobs(); break;
+      case "gesture": activity(`${GESTURE_EMOJI[ev.nombre] || "✋"} ${ev.accion.replace(/_/g, " ")}`, 1500); break;
       case "computer": if (ev.on) activity("Manejando el ordenador…", 8000); else sfx.done(); break;
       case "memory": if (view === "memory") renderMemory(ev.items || []); break;
       case "background": background = !!ev.on; document.body.classList.toggle("bg", background); if (!background) $("confirm").classList.remove("on"); break;

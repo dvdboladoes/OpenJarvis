@@ -89,6 +89,10 @@ temperatura = 0.6
 # false = Claude contesta sin "pensar" antes (unos 1,5 s más rápido).
 # true = razona antes de hablar: más lento, útil para preguntas difíciles.
 pensar = false
+# Modelo del "equipo experto" para tareas elaboradas en segundo plano
+# (programar, investigar, redactar, manejar el ordenador).
+modelo_experto = "claude-sonnet-5-5"
+esfuerzo_experto = "medium"   # low = más rápido · medium · high = más cuidadoso
 
 [briefing]
 # Fuentes conectadas con `jarvis connect gdrive` (Gmail, Calendar, Tasks)
@@ -132,7 +136,52 @@ navegador = "auto"       # Ventana de Jarvis: "chrome", "edge" o "auto" (Edge)
 # abre en él la dirección que muestra Ajustes → Remoto y escribe el PIN.
 acceso = false
 pin = ""
+
+[gestos]
+# Con la cámara encendida y «Gestos» activado, cada gesto de la mano hace algo.
+# Acciones: nada, play_pausa, siguiente, anterior, subir_volumen, bajar_volumen,
+# silenciar, escuchar, callar, segundo_plano
+palma = "play_pausa"
+puno = "callar"
+pulgar_arriba = "subir_volumen"
+pulgar_abajo = "bajar_volumen"
+victoria = "escuchar"
+senalar = "siguiente"
+rock = "nada"
 """
+
+
+# Hand gestures seen by the camera → what Jarvis does (Ajustes → Gestos).
+GESTURE_ACTIONS = {
+    "nada": "No hacer nada",
+    "play_pausa": "Pausar / reanudar la música",
+    "siguiente": "Siguiente canción",
+    "anterior": "Canción anterior",
+    "subir_volumen": "Subir el volumen",
+    "bajar_volumen": "Bajar el volumen",
+    "silenciar": "Silenciar / quitar silencio",
+    "escuchar": "Jarvis te escucha",
+    "callar": "Jarvis se calla",
+    "segundo_plano": "Jarvis a segundo plano",
+}
+GESTURE_NAMES = {
+    "palma": "✋ Mano abierta",
+    "puno": "✊ Puño",
+    "pulgar_arriba": "👍 Pulgar arriba",
+    "pulgar_abajo": "👎 Pulgar abajo",
+    "victoria": "✌️ Victoria",
+    "senalar": "☝️ Señalar arriba",
+    "rock": "🤟 Te quiero",
+}
+DEFAULT_GESTURES = {
+    "palma": "play_pausa",
+    "puno": "callar",
+    "pulgar_arriba": "subir_volumen",
+    "pulgar_abajo": "bajar_volumen",
+    "victoria": "escuchar",
+    "senalar": "siguiente",
+    "rock": "nada",
+}
 
 
 @dataclass
@@ -172,6 +221,8 @@ class HudConfig:
     max_tokens: int = 500
     temperatura: float = 0.6
     pensar: bool = False
+    modelo_experto: str = "claude-sonnet-5-5"
+    esfuerzo_experto: str = "medium"
 
     fuentes: List[str] = field(
         default_factory=lambda: ["gcalendar", "gmail", "google_tasks"]
@@ -194,6 +245,8 @@ class HudConfig:
 
     acceso_remoto: bool = False
     pin: str = ""
+
+    gestos: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_GESTURES))
 
     path: Optional[Path] = None
 
@@ -281,6 +334,15 @@ def parse_hud_config(data: Dict[str, Any], path: Optional[Path] = None) -> HudCo
     d.max_tokens = int(_clamp(cerebro.get("max_tokens", d.max_tokens), 64, 4096, 500))
     d.temperatura = _clamp(cerebro.get("temperatura", d.temperatura), 0.0, 1.5, 0.6)
     d.pensar = bool(cerebro.get("pensar", d.pensar))
+    d.modelo_experto = str(cerebro.get("modelo_experto", d.modelo_experto) or "")
+    d.esfuerzo_experto = str(cerebro.get("esfuerzo_experto", d.esfuerzo_experto))
+    if d.esfuerzo_experto not in ("low", "medium", "high"):
+        d.esfuerzo_experto = "medium"
+    gestos = data.get("gestos", {}) or {}
+    d.gestos = {**DEFAULT_GESTURES}
+    for name in DEFAULT_GESTURES:
+        action = str(gestos.get(name, d.gestos[name]))
+        d.gestos[name] = action if action in GESTURE_ACTIONS else "nada"
 
     fuentes = briefing.get("fuentes", d.fuentes)
     d.fuentes = [str(s) for s in fuentes] if isinstance(fuentes, list) else d.fuentes
@@ -379,6 +441,31 @@ SETTINGS: List[Dict[str, Any]] = [
         "paso": 1,
     },
     {
+        "grupo": "Cerebro",
+        "seccion": "cerebro",
+        "clave": "modelo_experto",
+        "attr": "modelo_experto",
+        "tipo": "opcion",
+        "etiqueta": "Equipo experto (tareas elaboradas en segundo plano)",
+        "opciones": [
+            ["claude-sonnet-5-5", "Claude Sonnet 5.5 · rápido y muy bueno"],
+            ["claude-opus-5-5", "Claude Opus 5.5 · el mejor (más lento y caro)"],
+        ],
+    },
+    {
+        "grupo": "Cerebro",
+        "seccion": "cerebro",
+        "clave": "esfuerzo_experto",
+        "attr": "esfuerzo_experto",
+        "tipo": "opcion",
+        "etiqueta": "Esfuerzo del equipo experto",
+        "opciones": [
+            ["low", "Bajo · más rápido"],
+            ["medium", "Medio · equilibrado"],
+            ["high", "Alto · más cuidadoso"],
+        ],
+    },
+    {
         "grupo": "Voz",
         "seccion": "voz",
         "clave": "acuse",
@@ -471,6 +558,20 @@ SETTINGS: List[Dict[str, Any]] = [
         "tipo": "texto",
         "etiqueta": "PIN de acceso (mínimo 4 cifras)",
     },
+]
+
+
+SETTINGS += [
+    {
+        "grupo": "Gestos",
+        "seccion": "gestos",
+        "clave": name,
+        "attr": f"gesto:{name}",
+        "tipo": "opcion",
+        "etiqueta": label,
+        "opciones": [[k, v] for k, v in GESTURE_ACTIONS.items()],
+    }
+    for name, label in GESTURE_NAMES.items()
 ]
 
 

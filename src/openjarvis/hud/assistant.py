@@ -28,6 +28,7 @@ from openjarvis.hud.config import (
     save_config_value,
 )
 from openjarvis.hud.context import Snapshot, collect_snapshot
+from openjarvis.hud.jobs import Job, JobManager
 from openjarvis.hud.memory import MemoryStore
 from openjarvis.hud.pc import Action, parse_command
 from openjarvis.hud.pc import execute as run_pc_action
@@ -122,6 +123,7 @@ class JarvisAssistant:
         self.brain.set_notes(self.notes.texts())
         self.memory = MemoryStore(get_config_dir() / "jarvis_recuerdos.json")
         self.frames = FrameBroker(self.hub.publish)
+        self._news: "queue.Queue[Any]" = queue.Queue()  # finished jobs to announce
         self.agent = ClaudeAgent(
             cfg,
             self.brain,
@@ -130,6 +132,7 @@ class JarvisAssistant:
             look_camera=self._camera_frame,
             add_timer=lambda secs, label: self.timers.add(secs, label),
             power=lambda mode: setattr(self, "_after", mode),
+            start_job=lambda **kw: self.jobs.start(**kw),
             hide_hud=self._hide_for_screen,
             show_hud=self._show_after_screen,
             notify=self.hub.publish,
@@ -167,6 +170,10 @@ class JarvisAssistant:
                 "autostart": self._api_autostart,
                 "history": self._api_history,
                 "clap_calibrate": self._api_clap_calibrate,
+                "jobs": self._api_jobs,
+                "job_cancel": self._api_job_cancel,
+                "open_path": self._api_open_path,
+                "gesture": self._api_gesture,
             },
             port=cfg.puerto,
             remote=cfg.acceso_remoto,
@@ -187,6 +194,15 @@ class JarvisAssistant:
         self._t_heard = 0.0
         self.brain.cancel_event = self._cancel
         self.agent.cancel_event = self._cancel
+        self.jobs = JobManager(
+            cfg,
+            self.hub.publish,
+            self._job_done,
+            client=lambda: self.agent.client,
+            computer=self.agent._get_computer,  # noqa: SLF001
+            hide_hud=self._hide_for_screen,
+            show_hud=self._show_after_screen,
+        )
         self._awaiting = False
         self._spoke = False
         self._question = ""
@@ -496,11 +512,103 @@ class JarvisAssistant:
         if self._claps is not None and self._mic_enabled:
             # Wait for the room's echo of Jarvis' voice to die out first.
             threading.Timer(1.2, self._resume_claps).start()
+        if not self._news.empty():
+            threading.Thread(target=self._announce_news, daemon=True).start()
         after, self._after = self._after, ""
         if after == "background":
             threading.Thread(target=self.enter_background, daemon=True).start()
         elif after == "quit":
             threading.Thread(target=self._quit_by_voice, daemon=True).start()
+
+    # ── background jobs ───────────────────────────────────────────────
+
+    def _job_done(self, job: Job) -> None:
+        t = self.cfg.honorific
+        if job.estado == "hecha":
+            text = f"{t.capitalize()}, he terminado «{job.titulo}». {job.resultado}"
+        elif job.estado == "cancelada":
+            return
+        else:
+            text = (
+                f"{t.capitalize()}, la tarea «{job.titulo}» ha fallado. {job.resultado}"
+            )
+        self.brain._remember(
+            None, f"[Tarea {job.estado}: {job.titulo}] {job.resultado}"
+        )  # noqa: SLF001
+        self._news.put(text)
+        if not self._session.locked():
+            threading.Thread(target=self._announce_news, daemon=True).start()
+
+    def _announce_news(self) -> None:
+        """Say finished-job results out loud (waits if Jarvis is talking)."""
+        from openjarvis.hud.brain import SentenceSplitter
+
+        if not self._begin():
+            return  # _end() will call us again
+        try:
+            while not self._news.empty():
+                text = self._news.get_nowait()
+                splitter = SentenceSplitter()
+                pieces = splitter.feed(text) + splitter.flush()
+                self.hub.publish("notice", text=text)
+                self._say_stream(iter(pieces), fallback=lambda: text)
+        finally:
+            self._end()
+
+    def _api_jobs(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {"items": self.jobs.list()}
+
+    def _api_job_cancel(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {"ok": self.jobs.cancel(str(payload.get("id", "")))}
+
+    def _api_open_path(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Open a job's folder or file in Explorer / its program."""
+        from pathlib import Path
+
+        path = Path(str(payload.get("ruta", "")))
+        home = Path.home().resolve()
+        try:
+            path.resolve().relative_to(home)
+        except ValueError:
+            raise PermissionError("Solo puedo abrir cosas de tu carpeta personal.")
+        if not path.exists():
+            raise FileNotFoundError("Ya no existe.")
+        os.startfile(str(path))  # type: ignore[attr-defined]  # noqa: S606
+        return {"ok": True}
+
+    # ── camera gestures ──────────────────────────────────────────────────
+
+    def _api_gesture(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """A hand gesture seen by the camera: do what Ajustes → Gestos says."""
+        from openjarvis.hud.pc import _media_key
+        from openjarvis.hud.winctl import set_volume
+
+        name = str(payload.get("nombre", ""))
+        action = self.cfg.gestos.get(name, "nada")
+        if action == "nada":
+            return {"accion": action}
+        self.hub.publish("gesture", nombre=name, accion=action)
+        if action in ("play_pausa", "siguiente", "anterior"):
+            _media_key(
+                {"play_pausa": "play_pause", "siguiente": "next", "anterior": "prev"}[
+                    action
+                ]
+            )
+        elif action in ("subir_volumen", "bajar_volumen", "silenciar"):
+            set_volume(
+                change={
+                    "subir_volumen": "up",
+                    "bajar_volumen": "down",
+                    "silenciar": "mute",
+                }[action]
+            )
+        elif action == "escuchar":
+            self._api_listen({})
+        elif action == "callar":
+            threading.Thread(target=self.interrupt, daemon=True).start()
+        elif action == "segundo_plano":
+            threading.Thread(target=self.enter_background, daemon=True).start()
+        return {"accion": action}
 
     def _resume_claps(self) -> None:
         if self._claps is not None and self._mic_enabled and not self._session.locked():
@@ -1425,9 +1533,7 @@ class JarvisAssistant:
     def _api_config(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
         from openjarvis.hud.launcher import autostart_installed, local_addresses
 
-        settings = [
-            {**spec, "valor": getattr(self.cfg, spec["attr"])} for spec in SETTINGS
-        ]
+        settings = [{**spec, "valor": self._setting(spec["attr"])} for spec in SETTINGS]
         return {
             "ajustes": settings,
             "voces": voice_catalog(),
@@ -1453,7 +1559,10 @@ class JarvisAssistant:
         value = coerce_setting(spec, payload.get("valor"))
         if spec["attr"] == "pin" and value and (not value.isdigit() or len(value) < 4):
             raise ValueError("El PIN debe tener al menos 4 cifras.")
-        setattr(self.cfg, spec["attr"], value)
+        if spec["attr"].startswith("gesto:"):
+            self.cfg.gestos[spec["attr"].split(":", 1)[1]] = value
+        else:
+            setattr(self.cfg, spec["attr"], value)
         if self.cfg.path is not None:
             save_config_value(self.cfg.path, section, key, value)
         if spec["attr"] == "modelo":
@@ -1463,6 +1572,11 @@ class JarvisAssistant:
         if spec["attr"] == "pin":
             self.server.pin = value
         return {"valor": value, "reinicio": bool(spec.get("reinicio"))}
+
+    def _setting(self, attr: str) -> Any:
+        if attr.startswith("gesto:"):
+            return self.cfg.gestos.get(attr.split(":", 1)[1], "nada")
+        return getattr(self.cfg, attr)
 
     def _api_memory(self, _payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"items": self.memory.list()}
